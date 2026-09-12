@@ -1,5 +1,6 @@
 include(vision_pack_bundled_dep)
 include(ExternalProject)
+include(CMakeDependentOption)
 
 # ---------------------------------------------------------------------------
 # Bundling options — set OFF to use system-installed packages instead.
