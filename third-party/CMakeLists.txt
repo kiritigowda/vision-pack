@@ -67,6 +67,17 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
   set(protobuf_WITH_ZLIB            OFF CACHE BOOL "" FORCE)
   set(protobuf_MSVC_STATIC_RUNTIME  OFF CACHE BOOL "" FORCE)
   add_subdirectory(protobuf/cmake protobuf-build)
+  # protobuf v3.21.x triggers -Wstringop-overread false-positives in
+  # repeated_field.h with gcc-13. GCC's toolset-13 spec in manylinux_2_28
+  # promotes this to -Werror=stringop-overread, breaking the build.
+  # Suppress it only on the protobuf targets.
+  foreach(_pb_target libprotobuf libprotobuf-lite libprotoc protoc)
+    if(TARGET ${_pb_target})
+      target_compile_options(${_pb_target} PRIVATE
+        -Wno-stringop-overread
+        -Wno-error=stringop-overread)
+    endif()
+  endforeach()
   vision_pack_provide_package(protobuf Protobuf "third-party/protobuf-build")
   message(STATUS "[vision-pack] protobuf v3.21.12 bundled (ships with rocAL)")
 elseif(VISION_PACK_ENABLE_ROCAL)
