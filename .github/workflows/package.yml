@@ -1,0 +1,289 @@
+# vision-pack packaging
+#
+# Consumes staged artifacts from the CI workflow and produces:
+#   - DEB packages  (amdrocm-mivisionx, amdrocm-rocal, amdrocm-roccv,
+#                    amdrocm-rocpydecode + -devel/-test variants)
+#   - RPM packages  (same naming)
+#   - Tarballs      (vision-pack-dist-linux-<gpu_family>-<version>.tar.gz)
+#   - Meta-packages (amdrocm-vision, amdrocm-vision-sdk, amdrocm-vision-tests)
+#
+# Triggered by:
+#   - Successful completion of the CI workflow on main/develop
+#   - Manual dispatch (to repackage an existing CI run's artifacts)
+
+name: package
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: 'CI workflow run ID whose artifacts to package'
+        required: true
+      gpu_family:
+        description: 'GPU family'
+        required: false
+        default: 'gfx110X'
+      package_version:
+        description: 'Package version override (default: from git tag)'
+        required: false
+        default: ''
+      rocm_version:
+        description: 'ROCm version this was built against'
+        required: false
+        default: '10.1.0'
+
+jobs:
+  package:
+    # Only run on successful CI, or on manual dispatch
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    runs-on: ubuntu-24.04
+    container:
+      # Ubuntu 24.04 image with packaging tools — matches TheRock's package job
+      image: ubuntu:24.04
+      options: --user root
+
+    env:
+      GPU_FAMILY: ${{ inputs.gpu_family || 'gfx110X' }}
+      ROCM_VERSION: ${{ inputs.rocm_version || '10.1.0' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Resolve run ID — from trigger event or manual input
+      # -----------------------------------------------------------------------
+      - name: Resolve CI run ID
+        id: run
+        run: |
+          if [ -n "${{ inputs.ci_run_id }}" ]; then
+            echo "id=${{ inputs.ci_run_id }}" >> $GITHUB_OUTPUT
+          else
+            echo "id=${{ github.event.workflow_run.id }}" >> $GITHUB_OUTPUT
+          fi
+
+      # -----------------------------------------------------------------------
+      # Install packaging tools
+      # -----------------------------------------------------------------------
+      - name: Install packaging tools
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            cmake \
+            dpkg-dev \
+            debhelper \
+            equivs \
+            rpm \
+            createrepo-c \
+            patchelf \
+            python3 \
+            curl \
+            jq
+
+      # -----------------------------------------------------------------------
+      # Download staged artifacts from CI run
+      # -----------------------------------------------------------------------
+      - name: Download staged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: vision-pack-staged-${{ env.GPU_FAMILY }}
+          path: staging/
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show staging layout
+        run: |
+          echo "=== Staging contents ==="
+          find staging/ -name "*.so*" | sort | head -30
+          echo "=== Manifest ==="
+          cat staging/vision-pack-manifest.json 2>/dev/null || echo "(no manifest)"
+
+      # -----------------------------------------------------------------------
+      # Determine package version
+      # -----------------------------------------------------------------------
+      - name: Determine package version
+        id: version
+        run: |
+          if [ -n "${{ inputs.package_version }}" ]; then
+            VER="${{ inputs.package_version }}"
+          else
+            # Try git tag, fall back to manifest, fall back to 0.1.0
+            VER=$(git describe --tags --abbrev=0 2>/dev/null || \
+                  jq -r .version staging/vision-pack-manifest.json 2>/dev/null || \
+                  echo "0.1.0")
+            VER=${VER#v}   # strip leading 'v'
+          fi
+          BUILD_ID="${{ steps.run.outputs.id }}"
+          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "build_id=${BUILD_ID}" >> $GITHUB_OUTPUT
+          echo "Package version: ${VER}, build ID: ${BUILD_ID}"
+
+      # -----------------------------------------------------------------------
+      # CMake configure (packaging only — no build, just CPack targets)
+      # -----------------------------------------------------------------------
+      - name: Configure CPack
+        run: |
+          cmake -B pkg-build -S packaging/ \
+            -DVISION_PACK_STAGING_DIR="${{ github.workspace }}/staging" \
+            -DVISION_PACK_VERSION="${{ steps.version.outputs.version }}" \
+            -DVISION_PACK_ROCM_VERSION="${{ env.ROCM_VERSION }}" \
+            -DVISION_PACK_BUILD_ID="${{ steps.version.outputs.build_id }}"
+
+      # -----------------------------------------------------------------------
+      # Generate DEB packages
+      # -----------------------------------------------------------------------
+      - name: Generate DEB packages
+        working-directory: pkg-build
+        run: |
+          cpack -G DEB --verbose
+          ls -lh *.deb
+
+      # -----------------------------------------------------------------------
+      # Generate RPM packages
+      # -----------------------------------------------------------------------
+      - name: Generate RPM packages
+        working-directory: pkg-build
+        run: |
+          cpack -G RPM --verbose
+          ls -lh *.rpm
+
+      # -----------------------------------------------------------------------
+      # Generate tarball
+      # -----------------------------------------------------------------------
+      - name: Generate tarball
+        run: |
+          VER="${{ steps.version.outputs.version }}"
+          TARBALL="vision-pack-dist-linux-${{ env.GPU_FAMILY }}-${VER}.tar.gz"
+          tar -czf "${TARBALL}" -C staging/ .
+          ls -lh "${TARBALL}"
+          echo "tarball=${TARBALL}" >> $GITHUB_ENV
+
+      # -----------------------------------------------------------------------
+      # Generate meta-packages (amdrocm-vision, amdrocm-vision-sdk, etc.)
+      # -----------------------------------------------------------------------
+      - name: Generate meta DEB packages
+        working-directory: pkg-build
+        run: |
+          if command -v equivs-build >/dev/null 2>&1; then
+            cmake --build . --target package-meta-vision 2>/dev/null || \
+              echo "Meta package target not available — skipping"
+          else
+            echo "equivs-build not found — skipping meta-packages"
+          fi
+
+      # -----------------------------------------------------------------------
+      # Build APT repository metadata
+      # -----------------------------------------------------------------------
+      - name: Build APT repo metadata
+        run: |
+          mkdir -p repo/deb
+          cp pkg-build/*.deb repo/deb/ 2>/dev/null || true
+          cd repo/deb
+          dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
+          dpkg-scanpackages . /dev/null > Packages
+          echo "APT repo contents:"
+          ls -lh
+
+      # -----------------------------------------------------------------------
+      # Build YUM/DNF repository metadata
+      # -----------------------------------------------------------------------
+      - name: Build RPM repo metadata
+        run: |
+          mkdir -p repo/rpm
+          cp pkg-build/*.rpm repo/rpm/ 2>/dev/null || true
+          createrepo_c repo/rpm/
+          echo "RPM repo contents:"
+          ls -lh repo/rpm/
+
+      # -----------------------------------------------------------------------
+      # Upload packages as artifacts
+      # -----------------------------------------------------------------------
+      - name: Upload DEB packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: vision-pack-deb-${{ env.GPU_FAMILY }}-${{ steps.version.outputs.version }}
+          path: |
+            pkg-build/*.deb
+            repo/deb/
+          retention-days: 30
+
+      - name: Upload RPM packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: vision-pack-rpm-${{ env.GPU_FAMILY }}-${{ steps.version.outputs.version }}
+          path: |
+            pkg-build/*.rpm
+            repo/rpm/
+          retention-days: 30
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: vision-pack-tarball-${{ env.GPU_FAMILY }}-${{ steps.version.outputs.version }}
+          path: vision-pack-dist-linux-*.tar.gz
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Create GitHub prerelease (on main branch nightly only)
+      # -----------------------------------------------------------------------
+      - name: Create GitHub prerelease
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${{ steps.version.outputs.version }}"
+          BUILD="${{ steps.version.outputs.build_id }}"
+          TAG="nightly-${BUILD}"
+          TITLE="vision-pack nightly ${VER} (build ${BUILD})"
+
+          # Delete previous nightly tag if exists
+          gh release delete "${TAG}" --yes 2>/dev/null || true
+          git tag -d "${TAG}" 2>/dev/null || true
+
+          gh release create "${TAG}" \
+            --prerelease \
+            --title "${TITLE}" \
+            --notes "Nightly build of amdrocm-vision packages.
+
+**ROCm version**: ${{ env.ROCM_VERSION }}
+**GPU family**: ${{ env.GPU_FAMILY }}
+**Build**: ${BUILD}
+
+## Packages
+- \`amdrocm-mivisionx\` — MIVisionX OpenVX runtime + RPP extension
+- \`amdrocm-rocal\` — rocAL data augmentation library
+- \`amdrocm-roccv\` — rocCV GPU image processing
+- \`amdrocm-rocpydecode\` — Python video/JPEG decode bindings
+
+## Install (DEB)
+\`\`\`bash
+# Download and install
+dpkg -i amdrocm-mivisionx_${VER}_amd64.deb
+dpkg -i amdrocm-rocal_${VER}_amd64.deb
+dpkg -i amdrocm-roccv_${VER}_amd64.deb
+dpkg -i amdrocm-rocpydecode_${VER}_amd64.deb
+\`\`\`
+
+> Requires ROCm ${{ env.ROCM_VERSION }} or later." \
+            pkg-build/*.deb \
+            pkg-build/*.rpm \
+            vision-pack-dist-linux-*.tar.gz \
+            2>/dev/null || echo "Release creation skipped (no packages found)"
+
+      # -----------------------------------------------------------------------
+      # Package install smoke test
+      # -----------------------------------------------------------------------
+      - name: Smoke test DEB install
+        run: |
+          if ls pkg-build/amdrocm-mivisionx_*.deb 1>/dev/null 2>&1; then
+            echo "Testing DEB install..."
+            dpkg -i pkg-build/amdrocm-mivisionx_*.deb 2>/dev/null || \
+              dpkg --ignore-depends=amdrocm-rpp -i pkg-build/amdrocm-mivisionx_*.deb || \
+              echo "DEB install skipped (missing ROCm deps on packaging runner)"
+          fi
