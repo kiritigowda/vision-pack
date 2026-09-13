@@ -104,16 +104,16 @@ jobs:
       - name: Set up Python 3.12 from manylinux
         run: echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
 
+      # Only build-time tools — all runtime deps (turbojpeg, lmdb, libsndfile,
+      # protobuf) are built from source in third-party/ and bundled with the
+      # package. ffmpeg and OpenCV are excluded by design.
       - name: Install build tools
         run: |
           dnf install -y \
             cmake ninja-build \
-            lmdb-devel libsndfile-devel \
-            libjpeg-turbo-devel \
             python3-devel \
-            nasm tar gzip curl \
+            nasm tar gzip curl make \
             || true
-          dnf install -y ffmpeg-devel || true
 
       # Download the Quartz nightly ROCm SDK tarball for this GPU family.
       # If rocm_sdk_date is provided pin to that date, otherwise use latest.

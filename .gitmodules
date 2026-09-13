@@ -29,3 +29,10 @@
 	path = rocpydecode
 	url = https://github.com/ROCm/rocPyDecode.git
 	branch = develop
+[submodule "third-party/lmdb"]
+	path = third-party/lmdb
+	url = https://github.com/LMDB/lmdb.git
+	branch = mdb.master
+[submodule "third-party/libsndfile"]
+	path = third-party/libsndfile
+	url = https://github.com/libsndfile/libsndfile.git

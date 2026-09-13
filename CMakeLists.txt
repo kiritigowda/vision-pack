@@ -57,16 +57,19 @@ if(VISION_PACK_ENABLE_MIVISIONX)
     CMAKE_ARGS
       -DBACKEND=HIP
       -DGPU_SUPPORT=ON
+      "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+      -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
   )
 endif()
 
 # rocCV — no inter-library deps, only needs ROCm SDK
-# Fetches its own pybind11/dlpack via FetchContent (we could override later)
 if(VISION_PACK_ENABLE_ROCCV)
   vision_pack_subproject_declare(rocCV
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocCV"
     CMAKE_ARGS
       -DBUILD_PYPACKAGE=ON
+      "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+      -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
   )
 endif()
 
@@ -90,22 +93,31 @@ if(VISION_PACK_ENABLE_ROCPYDECODE)
   )
 endif()
 
-# rocAL — depends on mivisionx stage + bundled protobuf + turbojpeg
+# rocAL — depends on mivisionx stage + all bundled runtime deps
+# ffmpeg and opencv are explicitly disabled — they carry heavy transitive deps
+# and are not needed for the core augmentation functionality.
 if(VISION_PACK_ENABLE_ROCAL)
-  # Resolve bundled dep paths (set by third-party/CMakeLists.txt)
   set(_rocal_deps "")
   set(_rocal_extra_deps "")
+  # Bundled sysdeps prefix (set by third-party/CMakeLists.txt after add_subdirectory)
+  set(_bdeps "${VP_BUNDLED_DEPS_PREFIX}")
+
   set(_rocal_cmake_args
     -DBACKEND=HIP
     -DGPU_SUPPORT=ON
     -DBUILD_PYPACKAGE=ON
-    # RapidJSON finder is injected via CMAKE_MODULE_PATH (vision_pack_subproject)
+    # Disable ffmpeg — heavy transitive deps, excluded by design
+    -DBUILD_WITH_FFMPEG=OFF
+    # Disable OpenCV — excluded by design
+    -DBUILD_WITH_OPENCV=OFF
+    # Bake RPATH so bundled libs are found at runtime without LD_LIBRARY_PATH
+    "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
+    # RapidJSON finder injected via CMAKE_MODULE_PATH (vision_pack_subproject)
   )
 
   if(VISION_PACK_ENABLE_MIVISIONX)
     list(APPEND _rocal_deps mivisionx)
-    # After mivisionx stages, FindMIVisionX.cmake can find it via CMAKE_PREFIX_PATH.
-    # Also pass explicit vars since FindMIVisionX searches MIVisionX_PATH/include/mivisionx
     list(APPEND _rocal_cmake_args
       "-DOPENVX_LIBRARIES=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/lib/libopenvx.so"
       "-DVXRPP_LIBRARIES=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/lib/libvx_rpp.so"
@@ -117,16 +129,30 @@ if(VISION_PACK_ENABLE_ROCAL)
   if(VISION_PACK_BUNDLE_TURBOJPEG)
     list(APPEND _rocal_extra_deps turbojpeg_external)
     list(APPEND _rocal_cmake_args
-      "-DTURBO_JPEG_PATH=${CMAKE_BINARY_DIR}/third-party/libjpeg-turbo-install"
+      "-DTURBO_JPEG_PATH=${_bdeps}"
     )
   endif()
 
   if(VISION_PACK_BUNDLE_PROTOBUF)
-    # libprotobuf is the compiled target name from add_subdirectory(protobuf/cmake)
     list(APPEND _rocal_extra_deps libprotobuf)
     list(APPEND _rocal_cmake_args
       "-DProtobuf_ROOT=${CMAKE_BINARY_DIR}/third-party/protobuf-build"
       "-DCMAKE_POLICY_DEFAULT_CMP0074=NEW"
+    )
+  endif()
+
+  if(VISION_PACK_BUNDLE_LMDB)
+    list(APPEND _rocal_extra_deps lmdb_external)
+    list(APPEND _rocal_cmake_args
+      "-DLMDB_INCLUDE_DIR=${_bdeps}/include"
+      "-DLMDB_LIBRARY=${_bdeps}/lib/liblmdb.so"
+    )
+  endif()
+
+  if(VISION_PACK_BUNDLE_LIBSNDFILE)
+    list(APPEND _rocal_extra_deps libsndfile_external)
+    list(APPEND _rocal_cmake_args
+      "-DSndFile_ROOT=${_bdeps}"
     )
   endif()
 
