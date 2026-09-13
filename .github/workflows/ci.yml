@@ -130,18 +130,18 @@ jobs:
           echo "ROCm nightly cmake packages:"
           ls ${ROCM_PATH}/lib/cmake/ | head -20
 
-      # Install rocdecode-dev from the nightly rpm repo.
+      # Install amdrocm-decode-dev from the nightly rpm repo.
       # The SDK tarball does not include the rocdecode utility sources
       # required at build time by rocAL and rocPyDecode.
       # The rpm repo uses a separate path from the deb repo — find the latest
       # available build ID by listing the rpm directory directly.
-      - name: Install rocdecode-dev from nightly rpm repo
+      - name: Install amdrocm-decode-dev from nightly rpm repo
         run: |
           RPM_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/rpm"
           LATEST=$(curl -sL "${RPM_BASE}/" \
             | grep -o '[0-9]\{8\}-[0-9]*' | sort | tail -1)
           if [ -z "${LATEST}" ]; then
-            echo "Could not determine latest rpm build — skipping rocdecode-dev"
+            echo "Could not determine latest rpm build — skipping amdrocm-decode-dev"
           else
             echo "Nightly rpm build: ${LATEST}"
             REPO_URL="${RPM_BASE}/${LATEST}"
@@ -149,15 +149,18 @@ jobs:
             if curl -sf --head "${REPO_URL}/repodata/repomd.xml" >/dev/null 2>&1; then
               printf '[rocm-nightly]\nname=ROCm Nightly\nbaseurl=%s\nenabled=1\ngpgcheck=0\n' \
                 "${REPO_URL}" > /etc/yum.repos.d/rocm-nightly.repo
-              dnf install -y amdrocm-decode-dev 2>&1 || \
-                echo "amdrocm-decode-dev not found in repo — continuing without it"
+              # amdrocm-decode-dev: headers and cmake config
+              # amdrocm-decode-test: utility sources (rocvideodecode, resize_kernels.cpp
+              #   etc.) required at build time by rocAL and rocPyDecode
+              dnf install -y amdrocm-decode-dev amdrocm-decode-test 2>&1 || \
+                echo "amdrocm-decode-dev/test not found in rpm repo — continuing without it"
             else
-              echo "rpm repo not reachable at ${REPO_URL} — skipping rocdecode-dev"
+              echo "rpm repo not reachable at ${REPO_URL} — skipping amdrocm-decode-dev"
             fi
           fi
           # Verify whether rocdecode utils landed (needed by rocAL + rocPyDecode)
           ls "${ROCM_PATH}/share/rocdecode/utils/" 2>/dev/null \
-            && echo "rocdecode utils: found in SDK tarball" \
+            && echo "rocdecode utils: found" \
             || echo "rocdecode utils: not present — rocAL video decode and rocPyDecode will be disabled"
 
       - name: CMake configure

@@ -87,11 +87,17 @@ sudo apt-get install -y \
 ### ROCm computer vision packages
 
 ```bash
-# rocdecode utility sources (required by rocAL and rocPyDecode)
-sudo apt-get install -y amdrocm-decode-dev10.1
-# rocjpeg (required by rocAL)
-sudo apt-get install -y amdrocm-jpeg-dev10.1
+# amdrocm-decode-dev:  rocdecode headers and cmake config
+# amdrocm-decode-test: rocdecode utility sources (rocvideodecode/, resize_kernels.cpp)
+#                      required at build time by rocAL and rocPyDecode
+sudo apt-get install -y amdrocm-decode-dev amdrocm-decode-test
+
+# amdrocm-jpeg-dev: rocJPEG headers (required by rocAL)
+sudo apt-get install -y amdrocm-jpeg-dev
 ```
+
+> **Note:** The versioned variants (`amdrocm-decode-dev10.1`, `amdrocm-jpeg-dev10.1`) also
+> work and may be preferred when pinning to a specific ROCm release.
 
 > **Note:** rpp (ROCm Performance Primitives) is required by MIVisionX.
 > It is included in the ROCm 10.1 SDK install. Verify with:
