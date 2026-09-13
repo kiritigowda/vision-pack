@@ -99,6 +99,11 @@ jobs:
           submodules: recursive
           ref: ${{ needs.bump-submodules.outputs.sha || github.sha }}
 
+      # manylinux_2_28 ships Python 3.12 at /opt/python/cp312-cp312/bin.
+      # Put it on PATH so `python3` resolves to 3.12 for our scripts.
+      - name: Set up Python 3.12 from manylinux
+        run: echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+
       - name: Install build tools
         run: |
           dnf install -y \

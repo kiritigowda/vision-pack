@@ -18,17 +18,17 @@ NIGHTLY_BASE = "https://rocm.nightlies.amd.com/tarball-multi-arch"
 INDEX_URL = f"{NIGHTLY_BASE}/"
 
 
-def list_available(gpu_family: str) -> list[str]:
+def list_available(gpu_family):
     """Return sorted list of available tarball names for a GPU family."""
     with urllib.request.urlopen(INDEX_URL) as resp:
         html = resp.read().decode()
-    pattern = rf"therock-dist-linux-{re.escape(gpu_family)}-[^\"]*\.tar\.gz"
+    pattern = r"therock-dist-linux-" + re.escape(gpu_family) + r"-[^\"]*\.tar\.gz"
     tarballs = sorted(set(re.findall(pattern, html)))
     return [t for t in tarballs if "test" not in t]
 
 
-def latest_tarball(gpu_family: str, date: str | None = None) -> tuple[str, str]:
-    """Return (tarball_name, url) for the latest (or date-pinned) SDK."""
+def latest_tarball(gpu_family, date=None):
+    # Returns (tarball_name, url) for the latest (or date-pinned) SDK.
     available = list_available(gpu_family)
     if not available:
         sys.exit(f"No tarballs found for GPU family '{gpu_family}'")
@@ -44,7 +44,7 @@ def latest_tarball(gpu_family: str, date: str | None = None) -> tuple[str, str]:
     return name, f"{NIGHTLY_BASE}/{name}"
 
 
-def download_and_extract(url: str, dest: Path, strip: int = 1) -> None:
+def download_and_extract(url, dest, strip=1):
     """Stream-download and extract tarball to dest."""
     dest.mkdir(parents=True, exist_ok=True)
     print(f"Downloading {url} -> {dest}", flush=True)
@@ -58,7 +58,7 @@ def download_and_extract(url: str, dest: Path, strip: int = 1) -> None:
     print(f"Extracted to {dest}", flush=True)
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(description="Fetch Quartz nightly ROCm SDK tarball")
     parser.add_argument("--gpu-family", default="gfx110X",
                         help="GPU family name e.g. gfx110X, gfx1151, gfx120X-all (default: gfx110X)")
