@@ -1,15 +1,3 @@
-# vision-pack CI
-#
-# Builds all four ROCm CV libraries inside a manylinux_2_28 container against
-# the latest Quartz nightly SDK, runs available ctests, and uploads staged
-# artifacts for the packaging workflow to consume.
-#
-# Triggers:
-#   - Push / PR to main or develop
-#   - Path changes under any component or cmake/
-#   - Daily schedule (nightly submodule bump + build)
-#   - Manual dispatch with optional date pin
-
 name: ci
 
 on:
@@ -27,12 +15,11 @@ on:
   pull_request:
     branches: [main, develop]
   schedule:
-    # Nightly at 02:00 UTC — bump submodules to develop HEAD then build
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       rocm_sdk_date:
-        description: 'Quartz nightly date (YYYYMMDD, empty = latest)'
+        description: 'Quartz nightly date YYYYMMDD (empty = latest)'
         required: false
         default: ''
       gpu_family:
@@ -40,7 +27,7 @@ on:
         required: false
         default: 'gfx110X'
       bump_submodules:
-        description: 'Bump vision library submodules to develop HEAD before building'
+        description: 'Bump vision library submodules to develop HEAD'
         type: boolean
         default: false
 
@@ -51,7 +38,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Optional: bump submodules to latest develop HEAD (nightly only)
+  # Bump submodules to latest develop HEAD (nightly schedule only)
   # ---------------------------------------------------------------------------
   bump-submodules:
     if: github.event_name == 'schedule' || inputs.bump_submodules == true
@@ -79,21 +66,18 @@ jobs:
         run: |
           if git diff --cached --quiet; then
             echo "No submodule changes"
-            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           else
             SHAS=$(git submodule status mivisionx rocal rocCV rocpydecode \
               | awk '{printf "%s %.8s\n", $2, $1}' | tr '\n' ',' | sed 's/,$//')
-            git commit -m "chore(nightly): bump vision submodules to develop HEAD
-
-${SHAS}
-
-[skip ci]"
+            COMMIT_MSG=$(printf 'chore(nightly): bump vision submodules to develop HEAD\n\n%s\n\n[skip ci]' "${SHAS}")
+            git commit -m "${COMMIT_MSG}"
             git push
-            echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
 
   # ---------------------------------------------------------------------------
-  # Main build — manylinux_2_28 container (RHEL/AlmaLinux 8 base)
+  # Build — manylinux_2_28 container (same base as TheRock)
   # ---------------------------------------------------------------------------
   build:
     needs: [bump-submodules]
@@ -115,9 +99,6 @@ ${SHAS}
           submodules: recursive
           ref: ${{ needs.bump-submodules.outputs.sha || github.sha }}
 
-      # -----------------------------------------------------------------------
-      # Install build tools not in manylinux base
-      # -----------------------------------------------------------------------
       - name: Install build tools
         run: |
           dnf install -y \
@@ -125,82 +106,65 @@ ${SHAS}
             lmdb-devel libsndfile-devel \
             libjpeg-turbo-devel \
             python3-devel \
-            nasm \
-            tar gzip curl \
+            nasm tar gzip curl \
             || true
-          # ffmpeg dev headers (optional — rocAL will build without them)
           dnf install -y ffmpeg-devel || true
 
-      # -----------------------------------------------------------------------
-      # Download Quartz nightly ROCm SDK
-      # -----------------------------------------------------------------------
-      - name: Fetch Quartz nightly ROCm SDK (${{ matrix.gpu_family }})
+      # Download the Quartz nightly ROCm SDK tarball for this GPU family.
+      # If rocm_sdk_date is provided pin to that date, otherwise use latest.
+      - name: Fetch Quartz nightly ROCm SDK
+        env:
+          GPU_FAMILY: ${{ matrix.gpu_family }}
+          SDK_DATE: ${{ inputs.rocm_sdk_date }}
         run: |
-          python3 build_tools/fetch_rocm_sdk.py \
-            --gpu-family "${{ matrix.gpu_family }}" \
-            --dest /opt/rocm-nightly \
-            ${{ inputs.rocm_sdk_date && format('--date {0}', inputs.rocm_sdk_date) || '' }}
-          echo "ROCm nightly contents:"
-          ls /opt/rocm-nightly/lib/cmake/ | head -20
+          ARGS="--gpu-family ${GPU_FAMILY} --dest ${ROCM_PATH}"
+          if [ -n "${SDK_DATE}" ]; then
+            ARGS="${ARGS} --date ${SDK_DATE}"
+          fi
+          python3 build_tools/fetch_rocm_sdk.py ${ARGS}
+          echo "ROCm nightly cmake packages:"
+          ls ${ROCM_PATH}/lib/cmake/ | head -20
 
-      # -----------------------------------------------------------------------
-      # Install rocdecode-dev (provides utility sources required by rocAL
-      # and rocPyDecode — not in the SDK tarball, only in the deb repo)
-      # -----------------------------------------------------------------------
-      - name: Install rocdecode-dev from nightly deb repo
+      # Install rocdecode-dev from the nightly deb/rpm repo.
+      # The SDK tarball does not include the rocdecode utility sources
+      # required at build time by rocAL and rocPyDecode.
+      - name: Install rocdecode-dev from nightly repo
         run: |
-          LATEST_DEB=$(curl -sL https://rocm.nightlies.amd.com/packages-multi-arch/deb/ \
+          LATEST=$(curl -sL https://rocm.nightlies.amd.com/packages-multi-arch/deb/ \
             | grep -o '[0-9]\{8\}-[0-9]*' | sort | tail -1)
-          echo "Using deb repo: ${LATEST_DEB}"
-          # Install rpm equivalent on manylinux (AlmaLinux 8)
-          # rocdecode-dev RPM from nightly repo
-          REPO_URL="https://rocm.nightlies.amd.com/packages-multi-arch/rpm/${LATEST_DEB}"
-          cat > /etc/yum.repos.d/rocm-nightly.repo << EOF
-          [rocm-nightly]
-          name=ROCm Nightly
-          baseurl=${REPO_URL}
-          enabled=1
-          gpgcheck=0
-          EOF
+          echo "Nightly deb build: ${LATEST}"
+          REPO_URL="https://rocm.nightlies.amd.com/packages-multi-arch/rpm/${LATEST}"
+          printf '[rocm-nightly]\nname=ROCm Nightly\nbaseurl=%s\nenabled=1\ngpgcheck=0\n' \
+            "${REPO_URL}" > /etc/yum.repos.d/rocm-nightly.repo
           dnf install -y amdrocm-decode-dev || \
-            echo "rocdecode-dev not in rpm repo — will use tarball path"
+            echo "rocdecode-dev not available via rpm — continuing without it"
 
-      # -----------------------------------------------------------------------
-      # Configure
-      # -----------------------------------------------------------------------
       - name: CMake configure
+        env:
+          ROCM_PATH: ${{ env.ROCM_PATH }}
         run: |
           cmake -B build -S . \
             -GNinja \
-            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
-            -DROCM_PATH=${{ env.ROCM_PATH }} \
-            -DCMAKE_INSTALL_PREFIX=${{ env.ROCM_PATH }} \
+            -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
+            -DROCM_PATH="${ROCM_PATH}" \
+            -DCMAKE_INSTALL_PREFIX="${ROCM_PATH}" \
             -DVISION_PACK_ENABLE_MIVISIONX=ON \
             -DVISION_PACK_ENABLE_ROCAL=ON \
             -DVISION_PACK_ENABLE_ROCCV=ON \
             -DVISION_PACK_ENABLE_ROCPYDECODE=ON \
-            -DVP_BUILD_PARALLEL_LEVEL=${{ env.VP_BUILD_PARALLEL }}
+            -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}"
 
-      # -----------------------------------------------------------------------
-      # Build (all four in parallel where dependency graph allows)
-      # -----------------------------------------------------------------------
       - name: Build
-        run: cmake --build build --parallel ${{ env.VP_BUILD_PARALLEL }}
+        run: cmake --build build --parallel "${VP_BUILD_PARALLEL}"
 
-      # -----------------------------------------------------------------------
-      # Install to staging directory
-      # -----------------------------------------------------------------------
       - name: Install to staging
         run: |
           mkdir -p build/staging
           for proj in mivisionx rocCV rocpydecode rocal; do
-            cmake --install build/_subprojects/${proj}/build \
+            cmake --install "build/_subprojects/${proj}/build" \
               --prefix build/staging
           done
 
-      # -----------------------------------------------------------------------
-      # CTest — rocPyDecode (self-contained, always passes)
-      # -----------------------------------------------------------------------
       - name: CTest — rocPyDecode
         working-directory: build/_subprojects/rocpydecode/build
         env:
@@ -210,11 +174,7 @@ ${SHAS}
             --test-output-size-passed 1024 \
             --test-output-size-failed 102400 \
             -T Test
-        continue-on-error: false
 
-      # -----------------------------------------------------------------------
-      # CTest — MIVisionX (runvx-based tests; skip tests that need install)
-      # -----------------------------------------------------------------------
       - name: CTest — MIVisionX
         working-directory: build/_subprojects/mivisionx/build
         env:
@@ -226,60 +186,45 @@ ${SHAS}
             --test-output-size-passed 1024 \
             --test-output-size-failed 102400 \
             -T Test
-        continue-on-error: true   # GPU tests may not be available on CI runner
+        continue-on-error: true
 
-      # -----------------------------------------------------------------------
-      # CTest — rocCV (requires FULL_BUILD=ON to have tests; skip if none)
-      # -----------------------------------------------------------------------
       - name: CTest — rocCV
         working-directory: build/_subprojects/rocCV/build
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib
+          LD_LIBRARY_PATH: >-
+            ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib
         run: |
           COUNT=$(ctest -N 2>&1 | grep "Total Tests" | awk '{print $NF}')
-          echo "rocCV registered tests: ${COUNT}"
-          if [ "${COUNT}" -gt 0 ]; then
+          echo "rocCV registered tests: ${COUNT:-0}"
+          if [ "${COUNT:-0}" -gt 0 ]; then
             ctest --output-on-failure --parallel 4 -T Test
           else
-            echo "No tests registered (built with TESTS=OFF). Use -DFULL_BUILD=ON to enable."
+            echo "No tests (TESTS=OFF). Use -DFULL_BUILD=ON to enable."
           fi
         continue-on-error: true
 
-      # -----------------------------------------------------------------------
-      # Upload test results
-      # -----------------------------------------------------------------------
+      - name: Write build manifest
+        run: |
+          VER=$(git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")
+          printf '{"version":"%s","sha":"%s","gpu_family":"%s","rocm_path":"%s","build_type":"%s"}\n' \
+            "${VER}" \
+            "${{ github.sha }}" \
+            "${{ matrix.gpu_family }}" \
+            "${ROCM_PATH}" \
+            "${CMAKE_BUILD_TYPE}" \
+            > build/staging/vision-pack-manifest.json
+
       - name: Upload CTest results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ctest-results-${{ matrix.gpu_family }}
-          path: |
-            build/_subprojects/*/build/Testing/
+          path: build/_subprojects/*/build/Testing/
           retention-days: 14
 
-      # -----------------------------------------------------------------------
-      # Upload staged artifacts for packaging workflow
-      # -----------------------------------------------------------------------
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v4
         with:
           name: vision-pack-staged-${{ matrix.gpu_family }}
           path: build/staging/
           retention-days: 7
-
-      # -----------------------------------------------------------------------
-      # Upload subproject build dirs (for cpack)
-      # -----------------------------------------------------------------------
-      - name: Capture build metadata
-        run: |
-          # Write a manifest so the package job knows what was built
-          cat > build/staging/vision-pack-manifest.json << EOF
-          {
-            "version": "$(git describe --tags --always --dirty)",
-            "sha": "${{ github.sha }}",
-            "gpu_family": "${{ matrix.gpu_family }}",
-            "rocm_path": "${{ env.ROCM_PATH }}",
-            "components": ["mivisionx", "rocal", "roccv", "rocpydecode"],
-            "build_type": "${{ env.CMAKE_BUILD_TYPE }}"
-          }
-          EOF
