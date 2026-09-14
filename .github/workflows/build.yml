@@ -177,10 +177,16 @@ jobs:
           CORE_PATH="/opt/rocm/core-10.1"
           echo "ROCM_CORE_PATH=${CORE_PATH}" >> "$GITHUB_ENV"
 
-          # Verify critical paths under the overlay
+          # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils.
+          # Create a symlink so that path resolves to the deb-extracted utils.
+          # This avoids patching rocpydecode's CMakeLists.
+          mkdir -p "${ROCM_PATH}/share"
+          ln -sfn "${CORE_PATH}/share/rocdecode" "${ROCM_PATH}/share/rocdecode"
+
+          # Verify critical paths
           for CHECK in \
             "${CORE_PATH}/include/rpp/rpp.h:rpp headers" \
-            "${CORE_PATH}/share/rocdecode/utils:rocdecode utils" \
+            "${ROCM_PATH}/share/rocdecode/utils:rocdecode utils (via symlink)" \
             "${CORE_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers"; do
             PATH_CHECK="${CHECK%%:*}"
             LABEL="${CHECK##*:}"
@@ -191,23 +197,34 @@ jobs:
 
       - name: CMake configure
         run: |
-          # ROCM_PATH     = SDK tarball (/opt/rocm-nightly) — HIP, compiler, hip libs
+          # ROCM_PATH      = SDK tarball (/opt/rocm-nightly) — HIP, compiler, hip libs
           # ROCM_CORE_PATH = deb overlay (/opt/rocm/core-10.1) — rpp, rocdecode, rocjpeg
           # Pass both to CMAKE_PREFIX_PATH so find_package resolves both locations.
-          # Use the system cmake explicitly to avoid the pip cmake (CMake 4.x)
-          # which is on PATH from the manylinux Python install.
           CMAKE_PREFIX="${ROCM_PATH};${ROCM_CORE_PATH};${ROCM_CORE_PATH}/lib/llvm"
+
+          # Use the shared Python install which has libpython3.12.so (Development.Embed).
+          # The manylinux /opt/python build is statically linked — no libpython.so.
+          # TheRock's image installs shared Pythons to /opt/python-shared/.
+          SHARED_PY="/opt/python-shared/cp312-cp312"
+          if [ -d "${SHARED_PY}" ]; then
+            PYTHON_ARGS="-DPython3_ROOT_DIR=${SHARED_PY}"
+            echo "Using shared Python at ${SHARED_PY}"
+          else
+            PYTHON_ARGS=""
+            echo "Shared Python not found, using system Python"
+          fi
+
           cmake -B build -S . \
             -GNinja \
             -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
             -DROCM_PATH="${ROCM_PATH}" \
             "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX}" \
-            "-DROCPYDECODE_ROCM_PATH=${ROCM_CORE_PATH}" \
             -DVISION_PACK_ENABLE_MIVISIONX=ON \
             -DVISION_PACK_ENABLE_ROCAL=ON \
             -DVISION_PACK_ENABLE_ROCCV=ON \
             -DVISION_PACK_ENABLE_ROCPYDECODE=ON \
-            -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}"
+            -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}" \
+            ${PYTHON_ARGS}
 
       - name: Build
         run: cmake --build build --parallel "${VP_BUILD_PARALLEL}"
