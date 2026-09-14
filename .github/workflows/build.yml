@@ -153,6 +153,7 @@ jobs:
 
           # Use versioned 10.1 packages — unversioned ones are empty stubs.
           # Extract to / so ./opt/rocm/core-10.1/... lands at the correct path.
+          # amdrocm-decode-test10.1 is large (video files) — verify it extracts.
           for PKG in \
             amdrocm-rpp10.1 amdrocm-rpp-dev10.1 amdrocm-rpp-test10.1 \
             amdrocm-decode-dev10.1 amdrocm-decode-test10.1 \
@@ -164,35 +165,46 @@ jobs:
               continue
             fi
             DEB=$(mktemp --suffix=.deb)
+            echo "  Downloading ${PKG}..."
             curl -fsSL "${DEB_BASE}/${LATEST}/${FILENAME}" -o "${DEB}"
+            echo "  Extracting ${PKG} ($(du -sh "${DEB}" | cut -f1))..."
             dpkg-deb --extract "${DEB}" /
+            EXTRACT_RC=$?
             rm -f "${DEB}"
-            echo "  ${PKG} -> /"
+            if [ "${EXTRACT_RC}" -ne 0 ]; then
+              echo "  ERROR: extraction of ${PKG} failed (exit ${EXTRACT_RC})"
+              exit 1
+            fi
+            echo "  ${PKG} -> OK"
           done
           rm -f "${PKG_TMP}"
 
           # The core-10.1 overlay contains rpp, rocdecode, rocjpeg headers/cmake.
-          # Export as a separate variable — ROCM_PATH must stay pointing at
-          # the SDK tarball (/opt/rocm-nightly) so the compiler path resolves.
           CORE_PATH="/opt/rocm/core-10.1"
           echo "ROCM_CORE_PATH=${CORE_PATH}" >> "$GITHUB_ENV"
 
           # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils.
-          # Create a symlink so that path resolves to the deb-extracted utils.
-          # This avoids patching rocpydecode's CMakeLists.
-          mkdir -p "${ROCM_PATH}/share"
-          ln -sfn "${CORE_PATH}/share/rocdecode" "${ROCM_PATH}/share/rocdecode"
+          # Symlink the extracted rocdecode share into the SDK tarball path.
+          # Must wait until after deb extraction completes.
+          if [ -d "${CORE_PATH}/share/rocdecode" ]; then
+            mkdir -p "${ROCM_PATH}/share"
+            ln -sfn "${CORE_PATH}/share/rocdecode" "${ROCM_PATH}/share/rocdecode"
+            echo "  symlink: ${ROCM_PATH}/share/rocdecode -> ${CORE_PATH}/share/rocdecode"
+          else
+            echo "  ERROR: ${CORE_PATH}/share/rocdecode not found after extraction"
+            exit 1
+          fi
 
-          # Verify critical paths
+          # Verify all critical paths
           for CHECK in \
             "${CORE_PATH}/include/rpp/rpp.h:rpp headers" \
-            "${ROCM_PATH}/share/rocdecode/utils:rocdecode utils (via symlink)" \
+            "${ROCM_PATH}/share/rocdecode/utils/rocvideodecode:rocdecode utils/rocvideodecode" \
             "${CORE_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers"; do
             PATH_CHECK="${CHECK%%:*}"
             LABEL="${CHECK##*:}"
             ls "${PATH_CHECK}" >/dev/null 2>&1 \
               && echo "  ${LABEL}: OK" \
-              || echo "  ERROR: ${LABEL} not found at ${PATH_CHECK}"
+              || { echo "  ERROR: ${LABEL} not found at ${PATH_CHECK}"; exit 1; }
           done
 
       - name: CMake configure
