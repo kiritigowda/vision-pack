@@ -3,48 +3,61 @@ include(ExternalProject)
 include(CMakeDependentOption)
 
 # ---------------------------------------------------------------------------
-# Runtime RPATH strategy
+# Install layout — mirrors TheRock / /opt/rocm exactly
 #
-# All bundled runtime libs install to ${CMAKE_INSTALL_PREFIX}/lib/rocm_vision/
-# mirroring TheRock's rocm_sysdeps/ pattern. This directory is added to the
-# RPATH of each vision library so they resolve bundled deps at runtime without
-# polluting the system library path.
+# Vision libraries:
+#   lib/lib<name>.so           shared libs
+#   include/<name>/            headers
+#   lib/cmake/<name>/          cmake package configs
+#   share/<name>/              samples, test data
+#   share/doc/<name>/          LICENSE, changelogs
+#   bin/                       executables (runvx)
 #
-# Libs already in ROCm's rocm_sysdeps/ (zlib, bzip2, liblzma, etc.) are
-# linked via -Wl,-rpath,$ORIGIN/../lib/rocm_sysdeps/lib which is already
-# present in /opt/rocm — no rebundling needed.
+# Bundled runtime deps (turbojpeg, lmdb, libsndfile, protobuf):
+#   lib/rocm_sysdeps/lib/      same prefix ROCm uses for zlib, bzip2, etc.
 #
-# Excluded by design: ffmpeg (libavcodec/avformat/avutil/swscale) and OpenCV.
-# rocAL will build with these disabled (-DBUILD_WITH_FFMPEG=OFF, etc.) so
-# there is no runtime dependency on them.
+# RPATH on all vision .so files:
+#   $ORIGIN/../lib/rocm_sysdeps/lib   (finds our bundled deps + existing ROCm sysdeps)
+#   $ORIGIN                            (finds sibling libs: libopenvx -> libvx_rpp)
+#
+# ffmpeg and OpenCV are excluded — too many transitive deps.
 # ---------------------------------------------------------------------------
-set(VP_SYSDEPS_INSTALL_SUBDIR "lib/rocm_vision"
-    CACHE STRING "Subdir under CMAKE_INSTALL_PREFIX for bundled runtime libs")
-set(VP_BUNDLED_RPATH "$ORIGIN:$ORIGIN/../lib/rocm_vision/lib:$ORIGIN/../lib/rocm_sysdeps/lib"
+
+# The rocm_sysdeps/ subdir is already the ROCm convention — no new directories.
+set(VP_SYSDEPS_LIBDIR    "lib/rocm_sysdeps/lib"
+    CACHE STRING "Install subdir for bundled runtime deps (matches ROCm convention)")
+set(VP_SYSDEPS_INCLUDEDIR "lib/rocm_sysdeps/include"
+    CACHE STRING "Install subdir for bundled runtime dep headers")
+
+# RPATH baked into every vision .so:
+#   1. rocm_sysdeps/lib — our bundled deps + ROCm's existing sysdeps (zlib etc.)
+#   2. $ORIGIN           — sibling libs in the same lib/ dir
+set(VP_BUNDLED_RPATH
+    "$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib"
     CACHE STRING "RPATH baked into vision library .so files")
+
+# Build-time staging prefix for bundled deps (maps to rocm_sysdeps/ at install)
+set(_vp_sysdeps_stage "${CMAKE_BINARY_DIR}/third-party/rocm_sysdeps")
 
 # ---------------------------------------------------------------------------
 # Bundling options
 # ---------------------------------------------------------------------------
-option(VISION_PACK_BUNDLE_PYBIND11   "Build pybind11 from bundled source"          ON)
-option(VISION_PACK_BUNDLE_DLPACK     "Use bundled dlpack headers"                   ON)
-option(VISION_PACK_BUNDLE_RAPIDJSON  "Use bundled RapidJSON headers"                ON)
+option(VISION_PACK_BUNDLE_PYBIND11  "Build pybind11 from bundled source"        ON)
+option(VISION_PACK_BUNDLE_DLPACK    "Use bundled dlpack headers"                 ON)
+option(VISION_PACK_BUNDLE_RAPIDJSON "Use bundled RapidJSON headers"              ON)
 
-# rocAL runtime deps — only built when rocAL is enabled
+# Compiled runtime deps — only when rocAL is enabled
 cmake_dependent_option(VISION_PACK_BUNDLE_PROTOBUF
-  "Build protobuf from bundled source"        ON "VISION_PACK_ENABLE_ROCAL" OFF)
+  "Build protobuf from bundled source"       ON "VISION_PACK_ENABLE_ROCAL" OFF)
 cmake_dependent_option(VISION_PACK_BUNDLE_TURBOJPEG
-  "Build libjpeg-turbo from bundled source"   ON "VISION_PACK_ENABLE_ROCAL" OFF)
+  "Build libjpeg-turbo from bundled source"  ON "VISION_PACK_ENABLE_ROCAL" OFF)
 cmake_dependent_option(VISION_PACK_BUNDLE_LMDB
-  "Build LMDB from bundled source"            ON "VISION_PACK_ENABLE_ROCAL" OFF)
+  "Build LMDB from bundled source"           ON "VISION_PACK_ENABLE_ROCAL" OFF)
 cmake_dependent_option(VISION_PACK_BUNDLE_LIBSNDFILE
-  "Build libsndfile from bundled source"      ON "VISION_PACK_ENABLE_ROCAL" OFF)
-
-# Compute the bundled sysdeps install prefix
-set(_vp_sysdeps_prefix "${CMAKE_BINARY_DIR}/${VP_SYSDEPS_INSTALL_SUBDIR}")
+  "Build libsndfile from bundled source"     ON "VISION_PACK_ENABLE_ROCAL" OFF)
 
 # ---------------------------------------------------------------------------
-# pybind11 v3.1.0  (build-time only — compiled into .so, not shipped)
+# pybind11 v3.1.0  (build-time only — compiled into .so, not installed)
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_PYBIND11)
   set(PYBIND11_TEST OFF CACHE BOOL "" FORCE)
@@ -55,7 +68,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# dlpack v1.3  (build-time only — header-only, not shipped)
+# dlpack v1.3  (build-time only — header-only, not installed)
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_DLPACK)
   add_subdirectory(dlpack)
@@ -65,9 +78,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# RapidJSON master  (build-time only — compiled into librocal.so, not shipped)
-# Do NOT use add_subdirectory: generated RapidJSONConfig.cmake references
-# parent-session targets that break ExternalProject sub-builds.
+# RapidJSON master  (build-time only — compiled into librocal.so, not installed)
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_RAPIDJSON)
   vision_pack_provide_header_only(RapidJSON "${CMAKE_CURRENT_SOURCE_DIR}/rapidjson")
@@ -76,22 +87,17 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# protobuf v3.21.12  (ships with rocAL — libprotobuf.so)
-# v3.22+ requires abseil-cpp as a nested submodule; v3.21.12 is the last
-# release without it and still satisfies rocAL's >=3.12.4 requirement.
+# protobuf v3.21.12  → lib/rocm_sysdeps/lib/libprotobuf.so
+# v3.22+ requires abseil-cpp nested submodule; v3.21.12 satisfies rocAL >=3.12.4
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_PROTOBUF)
   set(protobuf_BUILD_TESTS         OFF CACHE BOOL "" FORCE)
   set(protobuf_BUILD_EXAMPLES      OFF CACHE BOOL "" FORCE)
   set(protobuf_WITH_ZLIB           OFF CACHE BOOL "" FORCE)
   set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
-  # Install into the bundled sysdeps prefix so it packages with the libs
-  set(protobuf_INSTALL_LIBDIR      "${_vp_sysdeps_prefix}/lib"     CACHE STRING "" FORCE)
-  set(protobuf_INSTALL_INCLUDEDIR  "${_vp_sysdeps_prefix}/include" CACHE STRING "" FORCE)
   add_subdirectory(protobuf/cmake protobuf-build)
-  # gcc-13 in manylinux_2_28 promotes -Wstringop-overread to an error via
-  # toolset-13 spec. These are false positives in protobuf v3.21.x template
-  # copy constructors. Suppress only on protobuf targets.
+  # gcc-13 promotes -Wstringop-overread to an error in manylinux_2_28 toolset.
+  # False positive in protobuf v3.21.x template copy constructors.
   foreach(_t libprotobuf libprotobuf-lite libprotoc protoc)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE
@@ -99,21 +105,29 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
     endif()
   endforeach()
   vision_pack_provide_package(protobuf Protobuf "third-party/protobuf-build")
-  message(STATUS "[vision-pack] protobuf v3.21.12 bundled -> ${_vp_sysdeps_prefix}")
+  # Install protobuf shared lib into rocm_sysdeps/ at package install time
+  install(FILES
+      "${CMAKE_BINARY_DIR}/third-party/protobuf-build/libprotobuf.so"
+      "${CMAKE_BINARY_DIR}/third-party/protobuf-build/libprotobuf-lite.so"
+    DESTINATION "${VP_SYSDEPS_LIBDIR}"
+    COMPONENT runtime
+    OPTIONAL
+  )
+  message(STATUS "[vision-pack] protobuf v3.21.12 → ${VP_SYSDEPS_LIBDIR}")
 elseif(VISION_PACK_ENABLE_ROCAL)
   find_package(Protobuf REQUIRED)
 endif()
 
 # ---------------------------------------------------------------------------
-# libjpeg-turbo 3.2.0  (ships with rocAL — libturbojpeg.so)
-# libjpeg-turbo explicitly forbids add_subdirectory(); use ExternalProject.
+# libjpeg-turbo 3.2.0  → lib/rocm_sysdeps/lib/libturbojpeg.so
+# libjpeg-turbo forbids add_subdirectory(); use ExternalProject.
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_TURBOJPEG)
-  set(_tj_install "${_vp_sysdeps_prefix}")
+  set(_tj_stage "${_vp_sysdeps_stage}")
   ExternalProject_Add(turbojpeg_external
     SOURCE_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo"
     BINARY_DIR  "${CMAKE_BINARY_DIR}/third-party/libjpeg-turbo-build"
-    INSTALL_DIR "${_tj_install}"
+    INSTALL_DIR "${_tj_stage}"
     CMAKE_ARGS
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
@@ -123,64 +137,66 @@ if(VISION_PACK_BUNDLE_TURBOJPEG)
       -DWITH_TURBOJPEG=ON
       -DWITH_SIMD=ON
     BUILD_BYPRODUCTS
-      "${_tj_install}/lib/libturbojpeg.so"
-      "${_tj_install}/lib/libjpeg.so"
+      "${_tj_stage}/lib/libturbojpeg.so"
+      "${_tj_stage}/lib/libjpeg.so"
   )
-  set(TurboJPEG_ROOT "${_tj_install}" CACHE PATH "Root of bundled libjpeg-turbo" FORCE)
-  message(STATUS "[vision-pack] libjpeg-turbo 3.2.0 bundled -> ${_tj_install}")
+  set(TurboJPEG_ROOT "${_tj_stage}" CACHE PATH "Root of bundled libjpeg-turbo" FORCE)
+  # Install into rocm_sysdeps/ at package install time
+  install(DIRECTORY "${_tj_stage}/lib/"
+    DESTINATION "${VP_SYSDEPS_LIBDIR}"
+    COMPONENT runtime
+    FILES_MATCHING PATTERN "libturbojpeg.so*" PATTERN "libjpeg.so*"
+  )
+  message(STATUS "[vision-pack] libjpeg-turbo 3.2.0 → ${VP_SYSDEPS_LIBDIR}")
 elseif(VISION_PACK_ENABLE_ROCAL)
   find_package(TurboJPEG REQUIRED)
 endif()
 
 # ---------------------------------------------------------------------------
-# LMDB 1.0.1  (ships with rocAL — liblmdb.so)
-# LMDB's CMakeLists is minimal — use ExternalProject for clean isolation.
-# The actual library source is in libraries/liblmdb/ inside the repo.
+# LMDB 1.0.1  → lib/rocm_sysdeps/lib/liblmdb.so
+# LMDB has no CMakeLists; built via its Makefile.
+# Source lives in libraries/liblmdb/ inside the repo.
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_LMDB)
-  set(_lmdb_install "${_vp_sysdeps_prefix}")
+  set(_lmdb_stage "${_vp_sysdeps_stage}")
   ExternalProject_Add(lmdb_external
     SOURCE_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb"
     BINARY_DIR  "${CMAKE_BINARY_DIR}/third-party/lmdb-build"
-    INSTALL_DIR "${_lmdb_install}"
-    # LMDB has no CMakeLists — use its Makefile directly
+    INSTALL_DIR "${_lmdb_stage}"
     CONFIGURE_COMMAND ""
     BUILD_COMMAND
       make -C "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb"
-        prefix=<INSTALL_DIR>
+        "prefix=<INSTALL_DIR>"
         "CFLAGS=-O2 -fPIC"
     INSTALL_COMMAND
       make -C "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb"
-        prefix=<INSTALL_DIR>
+        "prefix=<INSTALL_DIR>"
         install
-    BUILD_BYPRODUCTS
-      "${_lmdb_install}/lib/liblmdb.so"
+    BUILD_BYPRODUCTS "${_lmdb_stage}/lib/liblmdb.so"
   )
-  set(LMDB_ROOT "${_lmdb_install}" CACHE PATH "Root of bundled LMDB" FORCE)
-  message(STATUS "[vision-pack] LMDB 1.0.1 bundled -> ${_lmdb_install}")
+  set(LMDB_ROOT "${_lmdb_stage}" CACHE PATH "Root of bundled LMDB" FORCE)
+  install(DIRECTORY "${_lmdb_stage}/lib/"
+    DESTINATION "${VP_SYSDEPS_LIBDIR}"
+    COMPONENT runtime
+    FILES_MATCHING PATTERN "liblmdb.so*"
+  )
+  message(STATUS "[vision-pack] LMDB 1.0.1 → ${VP_SYSDEPS_LIBDIR}")
 elseif(VISION_PACK_ENABLE_ROCAL)
-  find_package(LMDB QUIET)
-  if(NOT LMDB_FOUND)
-    find_library(LMDB_LIBRARIES NAMES lmdb)
-    find_path(LMDB_INCLUDE_DIRS NAMES lmdb.h)
-    if(LMDB_LIBRARIES AND LMDB_INCLUDE_DIRS)
-      set(LMDB_FOUND TRUE)
-    endif()
-  endif()
+  find_library(LMDB_LIBRARIES NAMES lmdb)
+  find_path(LMDB_INCLUDE_DIRS NAMES lmdb.h)
 endif()
 
 # ---------------------------------------------------------------------------
-# libsndfile 1.2.2  (ships with rocAL — libsndfile.so)
-# Required for rocAL audio augmentation support.
-# Built without external format encoders (mp3, vorbis etc.) — those are
-# optional and pull in heavy deps we want to avoid.
+# libsndfile 1.2.2  → lib/rocm_sysdeps/lib/libsndfile.so
+# Built without external format libs (ENABLE_EXTERNAL_LIBS=OFF) to avoid
+# pulling in libvorbis, libFLAC, libopus, libmpg123 etc.
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_LIBSNDFILE)
-  set(_sndfile_install "${_vp_sysdeps_prefix}")
+  set(_sndfile_stage "${_vp_sysdeps_stage}")
   ExternalProject_Add(libsndfile_external
     SOURCE_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/libsndfile"
     BINARY_DIR  "${CMAKE_BINARY_DIR}/third-party/libsndfile-build"
-    INSTALL_DIR "${_sndfile_install}"
+    INSTALL_DIR "${_sndfile_stage}"
     CMAKE_ARGS
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
@@ -189,22 +205,21 @@ if(VISION_PACK_BUNDLE_LIBSNDFILE)
       -DBUILD_PROGRAMS=OFF
       -DBUILD_EXAMPLES=OFF
       -DBUILD_TESTING=OFF
-      # Disable optional heavy encoders — keep libsndfile self-contained
       -DENABLE_EXTERNAL_LIBS=OFF
       -DENABLE_MPEG=OFF
-    BUILD_BYPRODUCTS
-      "${_sndfile_install}/lib/libsndfile.so"
+    BUILD_BYPRODUCTS "${_sndfile_stage}/lib/libsndfile.so"
   )
-  set(SndFile_ROOT "${_sndfile_install}" CACHE PATH "Root of bundled libsndfile" FORCE)
-  message(STATUS "[vision-pack] libsndfile 1.2.2 bundled -> ${_sndfile_install}")
+  set(SndFile_ROOT "${_sndfile_stage}" CACHE PATH "Root of bundled libsndfile" FORCE)
+  install(DIRECTORY "${_sndfile_stage}/lib/"
+    DESTINATION "${VP_SYSDEPS_LIBDIR}"
+    COMPONENT runtime
+    FILES_MATCHING PATTERN "libsndfile.so*"
+  )
+  message(STATUS "[vision-pack] libsndfile 1.2.2 → ${VP_SYSDEPS_LIBDIR}")
 elseif(VISION_PACK_ENABLE_ROCAL)
   find_package(SndFile QUIET)
 endif()
 
-# ---------------------------------------------------------------------------
-# Expose bundled sysdeps prefix via a cache variable so the top-level
-# CMakeLists and vision_pack_subproject.cmake can pass it to rocAL's
-# configure step.
-# ---------------------------------------------------------------------------
-set(VP_BUNDLED_DEPS_PREFIX "${_vp_sysdeps_prefix}"
-    CACHE PATH "Install prefix for all bundled runtime deps" FORCE)
+# Expose staging prefix for top-level CMakeLists → rocAL cmake args
+set(VP_BUNDLED_DEPS_STAGE "${_vp_sysdeps_stage}"
+    CACHE PATH "Staging prefix for bundled runtime deps" FORCE)

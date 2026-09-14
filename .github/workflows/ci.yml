@@ -112,7 +112,7 @@ jobs:
           dnf install -y \
             cmake ninja-build \
             python3-devel \
-            nasm tar gzip curl make \
+            tar gzip curl make \
             || true
 
       # Download the Quartz nightly ROCm SDK tarball for this GPU family.

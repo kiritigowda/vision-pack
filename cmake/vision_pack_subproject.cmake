@@ -162,6 +162,10 @@ function(vision_pack_subproject_activate)
 
       CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        # Stage into _stage_dir during build so dependent subprojects can
+        # find headers/libs before the final install to ROCM_PATH.
+        # Each library's own CMakeLists defaults CMAKE_INSTALL_PREFIX to
+        # ROCM_PATH — we override to the stage dir here.
         -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
         -DROCM_PATH=${ROCM_PATH}
         "-DCMAKE_PREFIX_PATH=${_prefix_path_str}"
@@ -172,6 +176,7 @@ function(vision_pack_subproject_activate)
       BUILD_COMMAND
         ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${VP_BUILD_PARALLEL_LEVEL}
 
+      # Stage install: installs to _stage_dir (build-time use by dependents)
       INSTALL_COMMAND
         ${CMAKE_COMMAND} --install <BINARY_DIR> --prefix <INSTALL_DIR>
         COMMAND ${CMAKE_COMMAND} -E touch "${_stamp_dir}/stage.stamp"

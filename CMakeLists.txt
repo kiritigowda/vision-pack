@@ -12,20 +12,38 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # ---------------------------------------------------------------------------
-# ROCm SDK (pre-built Quartz nightly or stable release)
+# ROCm SDK — pre-built Quartz nightly or stable release.
+# All vision libraries and their bundled deps install INTO this prefix,
+# mirroring the exact layout of /opt/rocm (same as any other ROCm component).
 # ---------------------------------------------------------------------------
 if(NOT DEFINED ROCM_PATH)
   set(ROCM_PATH "/opt/rocm" CACHE PATH "Path to the ROCm SDK installation")
 endif()
+# CMAKE_INSTALL_PREFIX defaults to ROCM_PATH so `cmake --install` drops
+# everything directly into the ROCm tree — no new top-level dirs.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  set(CMAKE_INSTALL_PREFIX "${ROCM_PATH}" CACHE PATH "" FORCE)
+endif()
 message(STATUS "[vision-pack] Using ROCm SDK at: ${ROCM_PATH}")
+message(STATUS "[vision-pack] Install prefix:    ${CMAKE_INSTALL_PREFIX}")
+
+# ---------------------------------------------------------------------------
+# RPATH strategy — identical to how ROCm libs find rocm_sysdeps at runtime.
+# $ORIGIN/../lib/rocm_sysdeps/lib  finds our bundled deps AND existing ROCm
+#   sysdeps (zlib, bzip2, liblzma etc.) — no new directory, already exists.
+# $ORIGIN                          finds sibling libs (libopenvx → libvx_rpp).
+# ---------------------------------------------------------------------------
+set(VP_INSTALL_RPATH
+    "$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib"
+    CACHE STRING "RPATH baked into all vision .so files")
 
 # ---------------------------------------------------------------------------
 # Component enable flags
 # ---------------------------------------------------------------------------
-option(VISION_PACK_ENABLE_MIVISIONX  "Build MIVisionX"   ON)
-option(VISION_PACK_ENABLE_ROCAL      "Build rocAL"        ON)
-option(VISION_PACK_ENABLE_ROCCV      "Build rocCV"        ON)
-option(VISION_PACK_ENABLE_ROCPYDECODE "Build rocPyDecode" ON)
+option(VISION_PACK_ENABLE_MIVISIONX   "Build MIVisionX"   ON)
+option(VISION_PACK_ENABLE_ROCAL       "Build rocAL"        ON)
+option(VISION_PACK_ENABLE_ROCCV       "Build rocCV"        ON)
+option(VISION_PACK_ENABLE_ROCPYDECODE "Build rocPyDecode"  ON)
 
 # ---------------------------------------------------------------------------
 # Build parallelism for sub-builds
@@ -39,9 +57,11 @@ set(VP_BUILD_PARALLEL_LEVEL "${VP_NPROC}" CACHE STRING
   "Parallel jobs for each subproject build")
 
 # ---------------------------------------------------------------------------
-# Third-party bundled dependencies
-# Only build compiled deps (protobuf, turbojpeg) when rocAL is enabled.
-# Header-only deps (pybind11, dlpack, rapidjson) are always available.
+# Third-party bundled dependencies.
+# Compiled runtime deps (turbojpeg, protobuf, lmdb, libsndfile) install to
+# lib/rocm_sysdeps/lib/ — the same dir ROCm uses for zlib, bzip2, etc.
+# Header-only deps (pybind11, dlpack, rapidjson) are build-time only.
+# ffmpeg and OpenCV are excluded by design (heavy transitive deps).
 # ---------------------------------------------------------------------------
 add_subdirectory(third-party)
 
@@ -57,7 +77,9 @@ if(VISION_PACK_ENABLE_MIVISIONX)
     CMAKE_ARGS
       -DBACKEND=HIP
       -DGPU_SUPPORT=ON
-      "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+      # Install into ROCM_PATH (same as any ROCm lib):
+      #   lib/libopenvx.so, include/mivisionx/, lib/cmake/mivisionx/, etc.
+      "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
       -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
   )
 endif()
@@ -68,22 +90,29 @@ if(VISION_PACK_ENABLE_ROCCV)
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocCV"
     CMAKE_ARGS
       -DBUILD_PYPACKAGE=ON
-      "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+      "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
       -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
   )
 endif()
 
-# rocPyDecode — depends only on rocDecode/rocJPEG already in the SDK
-# rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils to find utility
-# sources. If they are not at ${ROCM_PATH}/share/rocdecode/utils, set
-# ROCPYDECODE_ROCM_PATH to the prefix that contains them.
+# rocPyDecode — depends only on rocDecode/rocJPEG already in the SDK.
+# rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils for utility sources.
+# Detect whether they live at the root or in a core-X.Y overlay.
 if(NOT DEFINED ROCPYDECODE_ROCM_PATH)
   if(EXISTS "${ROCM_PATH}/share/rocdecode/utils")
     set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}")
-  elseif(EXISTS "${ROCM_PATH}/core-10.1/share/rocdecode/utils")
-    set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}/core-10.1")
   else()
-    set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}")
+    # Search for core-X.Y overlay pattern used by nightly installs
+    file(GLOB _rocm_cores "${ROCM_PATH}/core-*/share/rocdecode/utils")
+    if(_rocm_cores)
+      list(GET _rocm_cores 0 _core_utils)
+      get_filename_component(_core_utils "${_core_utils}" DIRECTORY)
+      get_filename_component(_core_utils "${_core_utils}" DIRECTORY)
+      get_filename_component(_core_utils "${_core_utils}" DIRECTORY)
+      set(ROCPYDECODE_ROCM_PATH "${_core_utils}")
+    else()
+      set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}")
+    endif()
   endif()
 endif()
 if(VISION_PACK_ENABLE_ROCPYDECODE)
@@ -93,27 +122,22 @@ if(VISION_PACK_ENABLE_ROCPYDECODE)
   )
 endif()
 
-# rocAL — depends on mivisionx stage + all bundled runtime deps
-# ffmpeg and opencv are explicitly disabled — they carry heavy transitive deps
-# and are not needed for the core augmentation functionality.
+# rocAL — depends on mivisionx stage + bundled runtime deps.
+# ffmpeg and OpenCV disabled — excluded by design.
 if(VISION_PACK_ENABLE_ROCAL)
   set(_rocal_deps "")
   set(_rocal_extra_deps "")
-  # Bundled sysdeps prefix (set by third-party/CMakeLists.txt after add_subdirectory)
-  set(_bdeps "${VP_BUNDLED_DEPS_PREFIX}")
+  # Bundled sysdeps staging dir (set by third-party/CMakeLists.txt)
+  set(_bstage "${VP_BUNDLED_DEPS_STAGE}")
 
   set(_rocal_cmake_args
     -DBACKEND=HIP
     -DGPU_SUPPORT=ON
     -DBUILD_PYPACKAGE=ON
-    # Disable ffmpeg — heavy transitive deps, excluded by design
     -DBUILD_WITH_FFMPEG=OFF
-    # Disable OpenCV — excluded by design
     -DBUILD_WITH_OPENCV=OFF
-    # Bake RPATH so bundled libs are found at runtime without LD_LIBRARY_PATH
-    "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+    "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
-    # RapidJSON finder injected via CMAKE_MODULE_PATH (vision_pack_subproject)
   )
 
   if(VISION_PACK_ENABLE_MIVISIONX)
@@ -128,9 +152,7 @@ if(VISION_PACK_ENABLE_ROCAL)
 
   if(VISION_PACK_BUNDLE_TURBOJPEG)
     list(APPEND _rocal_extra_deps turbojpeg_external)
-    list(APPEND _rocal_cmake_args
-      "-DTURBO_JPEG_PATH=${_bdeps}"
-    )
+    list(APPEND _rocal_cmake_args "-DTURBO_JPEG_PATH=${_bstage}")
   endif()
 
   if(VISION_PACK_BUNDLE_PROTOBUF)
@@ -144,23 +166,21 @@ if(VISION_PACK_ENABLE_ROCAL)
   if(VISION_PACK_BUNDLE_LMDB)
     list(APPEND _rocal_extra_deps lmdb_external)
     list(APPEND _rocal_cmake_args
-      "-DLMDB_INCLUDE_DIR=${_bdeps}/include"
-      "-DLMDB_LIBRARY=${_bdeps}/lib/liblmdb.so"
+      "-DLMDB_INCLUDE_DIR=${_bstage}/include"
+      "-DLMDB_LIBRARY=${_bstage}/lib/liblmdb.so"
     )
   endif()
 
   if(VISION_PACK_BUNDLE_LIBSNDFILE)
     list(APPEND _rocal_extra_deps libsndfile_external)
-    list(APPEND _rocal_cmake_args
-      "-DSndFile_ROOT=${_bdeps}"
-    )
+    list(APPEND _rocal_cmake_args "-DSndFile_ROOT=${_bstage}")
   endif()
 
   vision_pack_subproject_declare(rocal
-    SOURCE_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/rocal"
-    DEPS        ${_rocal_deps}
-    EXTRA_DEPS  ${_rocal_extra_deps}
-    CMAKE_ARGS  ${_rocal_cmake_args}
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocal"
+    DEPS       ${_rocal_deps}
+    EXTRA_DEPS ${_rocal_extra_deps}
+    CMAKE_ARGS ${_rocal_cmake_args}
   )
 endif()
 

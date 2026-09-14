@@ -69,19 +69,17 @@ sudo apt-get update
 
 ### System packages (Ubuntu 22.04 / 24.04)
 
+Only build-time tools are required from the OS. All runtime dependencies
+(libturbojpeg, libprotobuf, liblmdb, libsndfile) are built from source
+and bundled in `lib/rocm_sysdeps/lib/` alongside the existing ROCm sysdeps.
+ffmpeg and OpenCV are excluded by design.
+
 ```bash
 sudo apt-get install -y \
     cmake \
     ninja-build \
     python3-dev \
-    libturbojpeg0-dev \
-    liblmdb-dev \
-    libsndfile1-dev \
-    libavcodec-dev \
-    libavformat-dev \
-    libavutil-dev \
-    libswscale-dev \
-    libtar-dev
+    make
 ```
 
 ### ROCm computer vision packages
@@ -174,29 +172,41 @@ sudo cmake --install build
 
 ### Install layout
 
+vision-pack installs directly into `/opt/rocm` using the exact same
+directory conventions as every other ROCm component — no new top-level
+directories are created.
+
 ```
 /opt/rocm/
 ├── lib/
-│   ├── libopenvx.so.1          MIVisionX OpenVX runtime
-│   ├── libvxu.so.1             MIVisionX VXU utilities
-│   ├── libvx_rpp.so.1          MIVisionX RPP extension
-│   ├── librocal.so.2           rocAL data loading library
-│   ├── rocal_pybind.*.so       rocAL Python bindings
-│   ├── libroccv.so.0           rocCV GPU image processing
-│   ├── rocpycv.*.so            rocCV Python bindings
-│   ├── rocpydecode.*.so        rocPyDecode video decode Python
-│   └── rocpyjpegdecode.*.so    rocPyDecode JPEG decode Python
+│   ├── libopenvx.so.1, libvxu.so.1, libvx_rpp.so.1    MIVisionX
+│   ├── librocal.so.2, rocal_pybind.*.so                 rocAL
+│   ├── libroccv.so.0, rocpycv.*.so, rocpycv.pyi         rocCV
+│   ├── rocpydecode.*.so, rocpyjpegdecode.*.so            rocPyDecode
+│   ├── cmake/
+│   │   └── roccv/                    cmake package config
+│   └── rocm_sysdeps/lib/             bundled runtime deps — same dir as
+│       ├── libturbojpeg.so*           ROCm's zlib, bzip2, liblzma etc.
+│       ├── libprotobuf.so*
+│       ├── liblmdb.so*
+│       └── libsndfile.so*
 ├── include/
-│   ├── mivisionx/              OpenVX + AMD extension headers
-│   ├── rocal/                  rocAL C++ API headers
-│   └── roccv/                  rocCV C++ API headers
+│   ├── mivisionx/                    OpenVX + AMD extension headers
+│   ├── rocal/                        rocAL C++ API headers
+│   └── roccv/                        rocCV C++ API headers
+├── bin/
+│   └── runvx                         MIVisionX graph execution tool
 └── share/
-    ├── mivisionx/              samples, test data
-    ├── rocal/                  test scripts
-    ├── roccv/                  samples, test data
-    ├── rocpyjpegdecode/        samples
-    └── rocpydecode/            samples
+    ├── mivisionx/                    samples, test data
+    ├── rocal/                        test scripts
+    ├── roccv/                        samples, test data
+    └── rocpydecode/                  samples
 ```
+
+Bundled runtime deps go into `lib/rocm_sysdeps/lib/` — the same directory
+ROCm already uses for its own sysdeps (zlib, bzip2, liblzma, libdrm, ...).
+All vision `.so` files have `$ORIGIN/../lib/rocm_sysdeps/lib` baked into
+their RPATH so they find these libs at runtime without `LD_LIBRARY_PATH`.
 
 ---
 
