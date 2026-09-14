@@ -94,21 +94,23 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
-      # TheRock's manylinux image already has everything pre-configured:
-      # gcc-toolset-13 with LIBRARY_PATH set, cmake 3.27, ninja, Python 3.12,
-      # dpkg, curl. Just install any extra deps and verify the environment.
-      - name: Verify build environment and install extra tools
+      # TheRock's manylinux image has gcc-toolset-13, cmake 3.27, ninja,
+      # Python 3.12 interpreter. We additionally need:
+      #   dpkg       — for dpkg-deb --extract of nightly deb packages
+      #   python3-devel — Python.h headers for rocCV/rocAL pybind11 builds
+      #     (manylinux /opt/python builds lack dev headers in the system path)
+      - name: Install extra build tools
         run: |
-          # Install dpkg for deb extraction (may not be in the image)
-          yum install -y dpkg make curl 2>/dev/null || true
+          yum install -y dpkg python3-devel make curl 2>/dev/null || true
 
           echo "=== Build environment ==="
           cmake --version
           python3 --version
           g++ --version | head -1
           echo "LIBRARY_PATH=${LIBRARY_PATH}"
+          python3 -c "import sysconfig; print('Python include:', sysconfig.get_path('include'))"
 
-          # Put Python 3.12 on PATH (already available, just ensure priority)
+          # Put manylinux Python 3.12 on PATH (interpreter + pip)
           echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
 
       # Download the Quartz nightly ROCm SDK tarball.

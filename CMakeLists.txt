@@ -86,12 +86,25 @@ endif()
 
 # rocCV — no inter-library deps, only needs ROCm SDK
 if(VISION_PACK_ENABLE_ROCCV)
+  # In manylinux the Python dev headers are under /opt/python/cp312-cp312.
+  # find_package(Python3 Development) needs a hint to find them.
+  # Python3_ROOT_DIR tells cmake where to look.
+  find_package(Python3 QUIET COMPONENTS Interpreter Development)
+  set(_roccv_python_args "")
+  if(Python3_EXECUTABLE)
+    list(APPEND _roccv_python_args
+      "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+      "-DPython3_INCLUDE_DIRS=${Python3_INCLUDE_DIRS}"
+      "-DPython3_LIBRARIES=${Python3_LIBRARIES}"
+    )
+  endif()
   vision_pack_subproject_declare(rocCV
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocCV"
     CMAKE_ARGS
       -DBUILD_PYPACKAGE=ON
       "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
       -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
+      ${_roccv_python_args}
   )
 endif()
 
@@ -99,22 +112,36 @@ endif()
 # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils for utility sources.
 # Detect whether they live at the root or in a core-X.Y overlay.
 if(NOT DEFINED ROCPYDECODE_ROCM_PATH)
+  # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils.
+  # When using a Quartz nightly tarball (ROCM_PATH=/opt/rocm-nightly) the
+  # rocdecode utils come from a separate deb package and land at
+  # /opt/rocm/core-X.Y/share/rocdecode/utils — a different root.
+  # Search both ROCM_PATH and /opt/rocm for a core-X.Y overlay.
   if(EXISTS "${ROCM_PATH}/share/rocdecode/utils")
     set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}")
   else()
-    # Search for core-X.Y overlay pattern used by nightly installs
-    file(GLOB _rocm_cores "${ROCM_PATH}/core-*/share/rocdecode/utils")
-    if(_rocm_cores)
-      list(GET _rocm_cores 0 _core_utils)
-      get_filename_component(_core_utils "${_core_utils}" DIRECTORY)
-      get_filename_component(_core_utils "${_core_utils}" DIRECTORY)
-      get_filename_component(_core_utils "${_core_utils}" DIRECTORY)
-      set(ROCPYDECODE_ROCM_PATH "${_core_utils}")
-    else()
+    # Search ROCM_PATH first, then the canonical /opt/rocm for overlays
+    set(_rocm_search_roots "${ROCM_PATH}" "/opt/rocm")
+    foreach(_root ${_rocm_search_roots})
+      file(GLOB _rocm_cores "${_root}/core-*/share/rocdecode/utils")
+      if(_rocm_cores)
+        list(GET _rocm_cores 0 _core_utils)
+        # Walk up 3 levels: utils -> rocdecode -> share -> core-X.Y root
+        get_filename_component(_core_root "${_core_utils}" DIRECTORY)
+        get_filename_component(_core_root "${_core_root}" DIRECTORY)
+        get_filename_component(_core_root "${_core_root}" DIRECTORY)
+        set(ROCPYDECODE_ROCM_PATH "${_core_root}")
+        break()
+      endif()
+    endforeach()
+    if(NOT DEFINED ROCPYDECODE_ROCM_PATH)
       set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}")
+      message(WARNING "[vision-pack] rocdecode utils not found — rocPyDecode "
+        "video decode may fail. Install amdrocm-decode-test.")
     endif()
   endif()
 endif()
+message(STATUS "[vision-pack] rocPyDecode ROCM_PATH: ${ROCPYDECODE_ROCM_PATH}")
 if(VISION_PACK_ENABLE_ROCPYDECODE)
   vision_pack_subproject_declare(rocpydecode
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocpydecode"
