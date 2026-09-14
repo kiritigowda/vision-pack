@@ -207,6 +207,9 @@ if(VISION_PACK_BUNDLE_LIBSNDFILE)
       -DBUILD_TESTING=OFF
       -DENABLE_EXTERNAL_LIBS=OFF
       -DENABLE_MPEG=OFF
+      # libsndfile 1.2.2 declares cmake_minimum_required(VERSION 3.1)
+      # which CMake >= 3.30 rejects. Suppress the policy error.
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     BUILD_BYPRODUCTS "${_sndfile_stage}/lib/libsndfile.so"
   )
   set(SndFile_ROOT "${_sndfile_stage}" CACHE PATH "Root of bundled libsndfile" FORCE)

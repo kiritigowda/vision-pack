@@ -89,20 +89,20 @@ jobs:
           fetch-depth: 0
 
       # manylinux_2_28 ships Python 3.12 at /opt/python/cp312-cp312/bin.
-      # Put it on PATH before anything else.
-      - name: Set up Python 3.12
-        run: echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
-
-      # Only build-time tools from the OS — all runtime deps (turbojpeg,
-      # protobuf, lmdb, libsndfile) are built from source in third-party/
-      # and bundled into lib/rocm_sysdeps/lib/. ffmpeg/OpenCV excluded.
-      - name: Install build tools
+      # Put it on PATH AFTER /usr/bin so system cmake (dnf-installed, 3.26+)
+      # takes precedence over any pip-installed cmake, which may be too old
+      # for libsndfile's cmake_minimum_required.
+      - name: Install build tools and set up Python 3.12
         run: |
           dnf install -y \
             cmake ninja-build \
             python3-devel \
             tar gzip curl make dpkg \
             || true
+          # Verify cmake version is sufficient (needs >= 3.21)
+          cmake --version
+          # Add Python 3.12 after /usr/bin to keep system cmake first
+          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
 
       # Download the Quartz nightly ROCm SDK tarball.
       # Vision libs have no GPU kernel code so gfx110X (gfx11 family)
