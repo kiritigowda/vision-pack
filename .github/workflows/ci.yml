@@ -130,38 +130,81 @@ jobs:
           echo "ROCm nightly cmake packages:"
           ls ${ROCM_PATH}/lib/cmake/ | head -20
 
-      # Install amdrocm-decode-dev from the nightly rpm repo.
-      # The SDK tarball does not include the rocdecode utility sources
-      # required at build time by rocAL and rocPyDecode.
-      # The rpm repo uses a separate path from the deb repo — find the latest
-      # available build ID by listing the rpm directory directly.
-      - name: Install amdrocm-decode-dev from nightly rpm repo
+      # Install amdrocm-decode-dev, amdrocm-decode-test, amdrocm-jpeg-dev,
+      # and amdrocm-jpeg-test from the nightly deb repo by extracting .deb
+      # files directly with dpkg-deb --extract (no dpkg database required —
+      # works on any Linux including manylinux/RHEL).
+      #
+      # The nightly rpm repo is not reliably available; the deb repo always is.
+      # dpkg-deb is available on RHEL/AlmaLinux 8 via the dpkg package.
+      #
+      # Packages needed:
+      #   amdrocm-decode-dev   — rocdecode headers and cmake config
+      #   amdrocm-decode-test  — rocdecode utility sources (rocvideodecode/,
+      #                          resize_kernels.cpp) required at build time
+      #                          by rocAL and rocPyDecode
+      #   amdrocm-jpeg-dev     — rocJPEG headers and cmake config (rocAL)
+      #   amdrocm-jpeg-test    — rocJPEG utility sources
+      - name: Install rocdecode and rocjpeg dev/test packages from nightly deb
         run: |
-          RPM_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/rpm"
-          LATEST=$(curl -sL "${RPM_BASE}/" \
+          dnf install -y dpkg 2>/dev/null || true
+
+          DEB_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/deb"
+
+          # Find the latest nightly deb build
+          LATEST=$(curl -sL "${DEB_BASE}/" \
             | grep -o '[0-9]\{8\}-[0-9]*' | sort | tail -1)
           if [ -z "${LATEST}" ]; then
-            echo "Could not determine latest rpm build — skipping amdrocm-decode-dev"
-          else
-            echo "Nightly rpm build: ${LATEST}"
-            REPO_URL="${RPM_BASE}/${LATEST}"
-            # Verify the repo is reachable before adding it
-            if curl -sf --head "${REPO_URL}/repodata/repomd.xml" >/dev/null 2>&1; then
-              printf '[rocm-nightly]\nname=ROCm Nightly\nbaseurl=%s\nenabled=1\ngpgcheck=0\n' \
-                "${REPO_URL}" > /etc/yum.repos.d/rocm-nightly.repo
-              # amdrocm-decode-dev: headers and cmake config
-              # amdrocm-decode-test: utility sources (rocvideodecode, resize_kernels.cpp
-              #   etc.) required at build time by rocAL and rocPyDecode
-              dnf install -y amdrocm-decode-dev amdrocm-decode-test 2>&1 || \
-                echo "amdrocm-decode-dev/test not found in rpm repo — continuing without it"
-            else
-              echo "rpm repo not reachable at ${REPO_URL} — skipping amdrocm-decode-dev"
-            fi
+            echo "ERROR: could not determine latest nightly deb build"
+            exit 1
           fi
-          # Verify whether rocdecode utils landed (needed by rocAL + rocPyDecode)
+          echo "Nightly deb build: ${LATEST}"
+
+          POOL="${DEB_BASE}/${LATEST}/pool/main"
+          DEST="${ROCM_PATH}"
+
+          # Packages to extract — dev provides headers/cmake, test provides
+          # utility sources needed at build time by rocAL and rocPyDecode
+          PKGS="
+            amdrocm-decode-dev
+            amdrocm-decode-test
+            amdrocm-jpeg-dev
+            amdrocm-jpeg-test
+          "
+
+          # Parse Packages.gz to get exact filenames for this build
+          PACKAGES_GZ="${DEB_BASE}/${LATEST}/dists/stable/main/binary-amd64/Packages.gz"
+          PACKAGES_TMP=$(mktemp)
+          curl -sL "${PACKAGES_GZ}" | zcat > "${PACKAGES_TMP}"
+
+          for PKG in ${PKGS}; do
+            FILENAME=$(awk "/^Package: ${PKG}$/{found=1} found && /^Filename:/{print \$2; exit}" \
+              "${PACKAGES_TMP}")
+            if [ -z "${FILENAME}" ]; then
+              echo "WARNING: ${PKG} not found in Packages index — skipping"
+              continue
+            fi
+            DEB_URL="${DEB_BASE}/${LATEST}/${FILENAME}"
+            DEB_FILE=$(mktemp --suffix=.deb)
+            echo "  Downloading ${PKG}..."
+            curl -fsSL "${DEB_URL}" -o "${DEB_FILE}"
+            dpkg-deb --extract "${DEB_FILE}" "${DEST}"
+            rm -f "${DEB_FILE}"
+            echo "  Installed ${PKG} -> ${DEST}"
+          done
+          rm -f "${PACKAGES_TMP}"
+
+          # Verify the critical utility sources landed
+          echo ""
+          echo "=== rocdecode utils ==="
           ls "${ROCM_PATH}/share/rocdecode/utils/" 2>/dev/null \
-            && echo "rocdecode utils: found" \
-            || echo "rocdecode utils: not present — rocAL video decode and rocPyDecode will be disabled"
+            && echo "rocdecode utils: OK" \
+            || echo "ERROR: rocdecode utils not found — check package extraction"
+
+          echo "=== rocjpeg headers ==="
+          ls "${ROCM_PATH}/include/rocjpeg/rocjpeg.h" 2>/dev/null \
+            && echo "rocjpeg headers: OK" \
+            || echo "WARNING: rocjpeg headers not found"
 
       - name: CMake configure
         env:
