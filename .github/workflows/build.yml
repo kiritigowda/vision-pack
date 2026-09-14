@@ -195,7 +195,7 @@ jobs:
           # Use the system cmake explicitly to avoid the pip cmake (CMake 4.x)
           # which is on PATH from the manylinux Python install.
           CMAKE_PREFIX="${ROCM_PATH};${ROCM_CORE_PATH};${ROCM_CORE_PATH}/lib/llvm"
-          /usr/bin/cmake -B build -S . \
+          cmake -B build -S . \
             -GNinja \
             -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
             -DROCM_PATH="${ROCM_PATH}" \
@@ -208,7 +208,7 @@ jobs:
             -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}"
 
       - name: Build
-        run: /usr/bin/cmake --build build --parallel "${VP_BUILD_PARALLEL}"
+        run: cmake --build build --parallel "${VP_BUILD_PARALLEL}"
 
       # Stage install — into build/staging/ (mirrors /opt/rocm layout).
       # Bundled sysdeps also land here via the install() rules in third-party/.
@@ -216,11 +216,11 @@ jobs:
         run: |
           mkdir -p build/staging
           for proj in mivisionx rocCV rocpydecode rocal; do
-            /usr/bin/cmake --install "build/_subprojects/${proj}/build" \
+            cmake --install "build/_subprojects/${proj}/build" \
               --prefix build/staging
           done
           # Install bundled sysdeps (turbojpeg, protobuf, lmdb, libsndfile)
-          /usr/bin/cmake --install build --prefix build/staging \
+          cmake --install build --prefix build/staging \
             --component rocm-sysdeps-vision 2>/dev/null || true
 
       - name: CTest — rocPyDecode
