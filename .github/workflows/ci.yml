@@ -170,6 +170,9 @@ jobs:
             amdrocm-decode-test
             amdrocm-jpeg-dev
             amdrocm-jpeg-test
+            amdrocm-rpp
+            amdrocm-rpp-dev
+            amdrocm-rpp-test
           "
 
           # Parse Packages.gz to get exact filenames for this build
@@ -205,6 +208,11 @@ jobs:
           ls "${ROCM_PATH}/include/rocjpeg/rocjpeg.h" 2>/dev/null \
             && echo "rocjpeg headers: OK" \
             || echo "WARNING: rocjpeg headers not found"
+
+          echo "=== rpp headers ==="
+          ls "${ROCM_PATH}/include/rpp/rpp.h" 2>/dev/null \
+            && echo "rpp headers: OK" \
+            || echo "ERROR: rpp headers not found — MIVisionX will fail to configure"
 
       - name: CMake configure
         env:
