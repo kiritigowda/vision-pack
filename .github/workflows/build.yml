@@ -78,6 +78,10 @@ jobs:
     container:
       image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:cf4f6d9909056906e4a1c0bc4c245658a0af4c6a6174082a86adfa2d518b7aeb
       options: --user root
+      # Override any ROCM_PATH the image may have set — ours points at the
+      # Quartz nightly SDK tarball extracted to /opt/rocm-nightly.
+      env:
+        ROCM_PATH: /opt/rocm-nightly
 
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
