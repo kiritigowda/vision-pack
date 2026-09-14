@@ -71,10 +71,12 @@ env:
 jobs:
   build:
     # Vision libs have no GPU kernel code — one build covers all GPU families.
-    # Use manylinux_2_28 (same base as TheRock) for maximum portability.
+    # Use TheRock's pre-built manylinux image which already has gcc-toolset-13,
+    # LIBRARY_PATH, and all build prerequisites configured correctly for
+    # amdclang++/lld builds. Same image TheRock uses for all its components.
     runs-on: ubuntu-24.04
     container:
-      image: quay.io/pypa/manylinux_2_28_x86_64
+      image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:cf4f6d9909056906e4a1c0bc4c245658a0af4c6a6174082a86adfa2d518b7aeb
       options: --user root
 
     outputs:
@@ -88,41 +90,21 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
-      # Install build tools and set up gcc-toolset-13 so amdclang++/lld
-      # can find libstdc++ at link time.
-      #
-      # In manylinux_2_28 (AlmaLinux 8) libstdc++ lives at
-      # /opt/rh/gcc-toolset-13/root/usr/lib64 — not on lld's default path.
-      # TheRock's Dockerfile solves this by installing gcc-toolset-13 and
-      # setting LIBRARY_PATH/LD_LIBRARY_PATH. We do the same here.
-      # See: TheRock/dockerfiles/build_manylinux_x86_64.Dockerfile
-      - name: Install build tools and configure gcc-toolset-13
+      # TheRock's manylinux image already has everything pre-configured:
+      # gcc-toolset-13 with LIBRARY_PATH set, cmake 3.27, ninja, Python 3.12,
+      # dpkg, curl. Just install any extra deps and verify the environment.
+      - name: Verify build environment and install extra tools
         run: |
-          # Remove any existing gcc-toolset that may conflict, install toolset-13
-          yum remove -y gcc-toolset* 2>/dev/null || true
-          yum install -y \
-            gcc-toolset-13-gcc \
-            gcc-toolset-13-gcc-c++ \
-            gcc-toolset-13-binutils \
-            gcc-toolset-13-libstdc++-devel \
-            cmake ninja-build \
-            python3-devel \
-            tar gzip curl make dpkg \
-            || true
+          # Install dpkg for deb extraction (may not be in the image)
+          yum install -y dpkg make curl 2>/dev/null || true
 
-          # Set gcc-toolset-13 env vars so amdclang++/lld find libstdc++.
-          # These mirror what TheRock's Dockerfile sets at image build time.
-          GCC_ROOT="/opt/rh/gcc-toolset-13/root"
-          echo "DEVTOOLSET_ROOTPATH=${GCC_ROOT}" >> "$GITHUB_ENV"
-          echo "${GCC_ROOT}/usr/bin" >> "$GITHUB_PATH"
-          echo "LIBRARY_PATH=${GCC_ROOT}/usr/lib64:${GCC_ROOT}/usr/lib" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=${GCC_ROOT}/usr/lib64:${GCC_ROOT}/usr/lib" >> "$GITHUB_ENV"
-
-          # Verify cmake version (needs >= 3.21) and compiler
+          echo "=== Build environment ==="
           cmake --version
-          echo "GCC toolset: $(${GCC_ROOT}/usr/bin/g++ --version 2>/dev/null | head -1)"
+          python3 --version
+          g++ --version | head -1
+          echo "LIBRARY_PATH=${LIBRARY_PATH}"
 
-          # Add Python 3.12 last so system cmake and gcc-toolset take priority
+          # Put Python 3.12 on PATH (already available, just ensure priority)
           echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
 
       # Download the Quartz nightly ROCm SDK tarball.
