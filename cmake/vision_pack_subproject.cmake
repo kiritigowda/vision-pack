@@ -168,6 +168,9 @@ function(vision_pack_subproject_activate)
       BINARY_DIR        "${_build_dir}"
       INSTALL_DIR       "${_stage_dir}"
       STAMP_DIR         "${_stamp_dir}"
+      # Use the same cmake binary that invoked this build — avoids picking up
+      # a different cmake (e.g. pip cmake 4.x) from PATH in sub-processes.
+      CMAKE_COMMAND     "${CMAKE_COMMAND}"
 
       # LIST_SEPARATOR tells ExternalProject to replace | back to ; in CMAKE_ARGS
       # so -DCMAKE_PREFIX_PATH=a|b|c becomes -DCMAKE_PREFIX_PATH=a;b;c correctly

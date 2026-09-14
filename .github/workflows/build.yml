@@ -163,9 +163,9 @@ jobs:
           rm -f "${PKG_TMP}"
 
           # The core-10.1 overlay contains rpp, rocdecode, rocjpeg headers/cmake.
-          # Update ROCM_PATH so cmake configure picks them up.
+          # Export as a separate variable — ROCM_PATH must stay pointing at
+          # the SDK tarball (/opt/rocm-nightly) so the compiler path resolves.
           CORE_PATH="/opt/rocm/core-10.1"
-          echo "ROCM_PATH=${ROCM_PATH}|${CORE_PATH}" >> "$GITHUB_ENV"
           echo "ROCM_CORE_PATH=${CORE_PATH}" >> "$GITHUB_ENV"
 
           # Verify critical paths under the overlay
@@ -182,11 +182,13 @@ jobs:
 
       - name: CMake configure
         run: |
-          # ROCM_PATH = SDK tarball (/opt/rocm-nightly) — HIP, compiler, hip libs
+          # ROCM_PATH     = SDK tarball (/opt/rocm-nightly) — HIP, compiler, hip libs
           # ROCM_CORE_PATH = deb overlay (/opt/rocm/core-10.1) — rpp, rocdecode, rocjpeg
-          # Both are added to CMAKE_PREFIX_PATH so find_package resolves correctly.
+          # Pass both to CMAKE_PREFIX_PATH so find_package resolves both locations.
+          # Use the system cmake explicitly to avoid the pip cmake (CMake 4.x)
+          # which is on PATH from the manylinux Python install.
           CMAKE_PREFIX="${ROCM_PATH};${ROCM_CORE_PATH};${ROCM_CORE_PATH}/lib/llvm"
-          cmake -B build -S . \
+          /usr/bin/cmake -B build -S . \
             -GNinja \
             -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
             -DROCM_PATH="${ROCM_PATH}" \
@@ -199,7 +201,7 @@ jobs:
             -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}"
 
       - name: Build
-        run: cmake --build build --parallel "${VP_BUILD_PARALLEL}"
+        run: /usr/bin/cmake --build build --parallel "${VP_BUILD_PARALLEL}"
 
       # Stage install — into build/staging/ (mirrors /opt/rocm layout).
       # Bundled sysdeps also land here via the install() rules in third-party/.
@@ -207,11 +209,11 @@ jobs:
         run: |
           mkdir -p build/staging
           for proj in mivisionx rocCV rocpydecode rocal; do
-            cmake --install "build/_subprojects/${proj}/build" \
+            /usr/bin/cmake --install "build/_subprojects/${proj}/build" \
               --prefix build/staging
           done
           # Install bundled sysdeps (turbojpeg, protobuf, lmdb, libsndfile)
-          cmake --install build --prefix build/staging \
+          /usr/bin/cmake --install build --prefix build/staging \
             --component rocm-sysdeps-vision 2>/dev/null || true
 
       - name: CTest — rocPyDecode
