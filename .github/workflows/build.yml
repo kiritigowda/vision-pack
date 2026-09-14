@@ -119,14 +119,15 @@ jobs:
           echo "SDK cmake packages available:"
           ls "${ROCM_PATH}/lib/cmake/" | head -20
 
-      # Extract dev+test packages from the nightly deb repo using dpkg-deb.
-      # The rpm repo is not reliably available; the deb repo always is.
-      # dpkg-deb --extract works on any Linux with no dpkg database needed.
+      # Install RPP, rocdecode, rocJPEG dev+test packages from the nightly deb repo.
       #
-      # Packages:
-      #   amdrocm-rpp / -dev / -test       RPP (required by MIVisionX)
-      #   amdrocm-decode-dev / -test        rocdecode headers + utils sources
-      #   amdrocm-jpeg-dev / -test          rocJPEG headers + utils sources
+      # These packages install files to ./opt/rocm/core-10.1/ inside the .deb,
+      # so we extract to / (filesystem root) and they land at /opt/rocm/core-10.1/.
+      # The unversioned packages (amdrocm-rpp, amdrocm-decode-test, etc.) are
+      # empty stubs — the versioned 10.1 variants contain the actual files.
+      #
+      # After extraction we update ROCM_PATH to point at the core-10.1 overlay
+      # where rpp/rocdecode/rocjpeg headers and cmake configs reside.
       - name: Install ROCm CV packages from nightly deb
         run: |
           DEB_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/deb"
@@ -137,14 +138,16 @@ jobs:
             exit 1
           fi
           echo "Nightly deb build: ${LATEST}"
-          PACKAGES_GZ="${DEB_BASE}/${LATEST}/dists/stable/main/binary-amd64/Packages.gz"
           PKG_TMP=$(mktemp)
-          curl -sL "${PACKAGES_GZ}" | zcat > "${PKG_TMP}"
+          curl -sL "${DEB_BASE}/${LATEST}/dists/stable/main/binary-amd64/Packages.gz" \
+            | zcat > "${PKG_TMP}"
 
+          # Use versioned 10.1 packages — unversioned ones are empty stubs.
+          # Extract to / so ./opt/rocm/core-10.1/... lands at the correct path.
           for PKG in \
-            amdrocm-rpp amdrocm-rpp-dev amdrocm-rpp-test \
-            amdrocm-decode-dev amdrocm-decode-test \
-            amdrocm-jpeg-dev amdrocm-jpeg-test; do
+            amdrocm-rpp10.1 amdrocm-rpp-dev10.1 amdrocm-rpp-test10.1 \
+            amdrocm-decode-dev10.1 amdrocm-decode-test10.1 \
+            amdrocm-jpeg-dev10.1 amdrocm-jpeg-test10.1; do
             FILENAME=$(awk "/^Package: ${PKG}$/{f=1} f && /^Filename:/{print \$2; exit}" \
               "${PKG_TMP}")
             if [ -z "${FILENAME}" ]; then
@@ -153,17 +156,23 @@ jobs:
             fi
             DEB=$(mktemp --suffix=.deb)
             curl -fsSL "${DEB_BASE}/${LATEST}/${FILENAME}" -o "${DEB}"
-            dpkg-deb --extract "${DEB}" "${ROCM_PATH}"
+            dpkg-deb --extract "${DEB}" /
             rm -f "${DEB}"
-            echo "  ${PKG} -> ${ROCM_PATH}"
+            echo "  ${PKG} -> /"
           done
           rm -f "${PKG_TMP}"
 
-          # Verify critical paths
+          # The core-10.1 overlay contains rpp, rocdecode, rocjpeg headers/cmake.
+          # Update ROCM_PATH so cmake configure picks them up.
+          CORE_PATH="/opt/rocm/core-10.1"
+          echo "ROCM_PATH=${ROCM_PATH}|${CORE_PATH}" >> "$GITHUB_ENV"
+          echo "ROCM_CORE_PATH=${CORE_PATH}" >> "$GITHUB_ENV"
+
+          # Verify critical paths under the overlay
           for CHECK in \
-            "${ROCM_PATH}/include/rpp/rpp.h:rpp headers" \
-            "${ROCM_PATH}/share/rocdecode/utils:rocdecode utils" \
-            "${ROCM_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers"; do
+            "${CORE_PATH}/include/rpp/rpp.h:rpp headers" \
+            "${CORE_PATH}/share/rocdecode/utils:rocdecode utils" \
+            "${CORE_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers"; do
             PATH_CHECK="${CHECK%%:*}"
             LABEL="${CHECK##*:}"
             ls "${PATH_CHECK}" >/dev/null 2>&1 \
@@ -173,10 +182,16 @@ jobs:
 
       - name: CMake configure
         run: |
+          # ROCM_PATH = SDK tarball (/opt/rocm-nightly) — HIP, compiler, hip libs
+          # ROCM_CORE_PATH = deb overlay (/opt/rocm/core-10.1) — rpp, rocdecode, rocjpeg
+          # Both are added to CMAKE_PREFIX_PATH so find_package resolves correctly.
+          CMAKE_PREFIX="${ROCM_PATH};${ROCM_CORE_PATH};${ROCM_CORE_PATH}/lib/llvm"
           cmake -B build -S . \
             -GNinja \
             -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
             -DROCM_PATH="${ROCM_PATH}" \
+            "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX}" \
+            "-DROCPYDECODE_ROCM_PATH=${ROCM_CORE_PATH}" \
             -DVISION_PACK_ENABLE_MIVISIONX=ON \
             -DVISION_PACK_ENABLE_ROCAL=ON \
             -DVISION_PACK_ENABLE_ROCCV=ON \

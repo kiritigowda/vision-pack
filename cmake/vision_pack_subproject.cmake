@@ -135,12 +135,25 @@ function(vision_pack_subproject_activate)
     # Resolve dep stage dirs → CMAKE_PREFIX_PATH for this project
     _vp_deps_to_prefix_path(_dep_prefix_paths ${_deps})
 
-    # Build the prefix path string: dep stages + ROCM_PATH + core overlay
+    # Build the prefix path string: dep stages + ROCM_PATH + any core overlays.
+    # The core-X.Y overlay pattern is used by nightly installs where packages
+    # like rpp, rocdecode, rocjpeg install into /opt/rocm/core-10.1/ rather
+    # than /opt/rocm/ directly.
     set(_prefix_path_list "${_dep_prefix_paths}")
-    list(APPEND _prefix_path_list
-      "${ROCM_PATH}"
-      "${ROCM_PATH}/core-10.1"
-      "${ROCM_PATH}/core-10.1/lib/llvm")
+    list(APPEND _prefix_path_list "${ROCM_PATH}")
+    # Add any core-X.Y overlays found under ROCM_PATH
+    file(GLOB _rocm_cores "${ROCM_PATH}/core-*/lib/cmake")
+    foreach(_core ${_rocm_cores})
+      get_filename_component(_core_root "${_core}" DIRECTORY)
+      get_filename_component(_core_root "${_core_root}" DIRECTORY)
+      list(APPEND _prefix_path_list "${_core_root}" "${_core_root}/lib/llvm")
+    endforeach()
+    # Also honour CMAKE_PREFIX_PATH set by the parent (e.g. from CI where
+    # the deb overlay is at a different path than the SDK tarball)
+    if(CMAKE_PREFIX_PATH)
+      list(APPEND _prefix_path_list ${CMAKE_PREFIX_PATH})
+    endif()
+    list(REMOVE_DUPLICATES _prefix_path_list)
     # Use | as list separator — ExternalProject LIST_SEPARATOR converts it back
     # to ; when passing -DCMAKE_PREFIX_PATH to the sub-cmake invocation.
     string(REPLACE ";" "|" _prefix_path_str "${_prefix_path_list}")
