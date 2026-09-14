@@ -1,55 +1,69 @@
+# vision-pack packaging workflow
+#
+# Consumes staged artifacts from build.yml and produces:
+#   - DEB packages  (amdrocm-mivisionx, -rocal, -roccv, -rocpydecode + variants)
+#   - RPM packages  (same naming)
+#   - Tarball       (vision-pack-dist-linux-multiarch-<version>.tar.gz)
+#   - Meta-packages (amdrocm-vision, amdrocm-vision-sdk, amdrocm-vision-tests)
+#   - GitHub prerelease with all assets attached (nightly only)
+#
+# Designed as a reusable workflow (workflow_call) so nightly.yml can call it,
+# following TheRock/RVS pattern of separating build from packaging.
+
 name: package
 
 on:
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
-    branches: [main, develop]
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: 'Name of the staged artifact from build.yml'
+        type: string
+        required: true
+      package_version:
+        description: 'Package version string'
+        type: string
+        required: false
+        default: ''
+      release_type:
+        description: 'ci | nightly'
+        type: string
+        required: false
+        default: 'ci'
+      sha:
+        description: 'Git SHA that was built'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
-      ci_run_id:
-        description: 'CI workflow run ID whose artifacts to package'
+      artifact_name:
+        description: 'Staged artifact name (from build.yml run)'
         required: true
-      gpu_family:
-        description: 'GPU family'
-        required: false
-        default: 'gfx110X'
       package_version:
-        description: 'Package version override (empty = from git tag)'
+        description: 'Package version override'
         required: false
         default: ''
       rocm_version:
         description: 'ROCm version this was built against'
         required: false
         default: '10.1.0'
+      release_type:
+        description: 'ci | nightly'
+        required: false
+        default: 'ci'
 
 jobs:
   package:
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
-
     runs-on: ubuntu-24.04
     container:
       image: ubuntu:24.04
       options: --user root
 
     env:
-      GPU_FAMILY: ${{ inputs.gpu_family || 'gfx110X' }}
       ROCM_VERSION: ${{ inputs.rocm_version || '10.1.0' }}
 
     steps:
       - uses: actions/checkout@v4
-
-      # Resolve the run ID of the CI workflow that produced staged artifacts.
-      - name: Resolve CI run ID
-        id: run
-        run: |
-          if [ -n "${{ inputs.ci_run_id }}" ]; then
-            echo "id=${{ inputs.ci_run_id }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Install packaging tools
         run: |
@@ -61,17 +75,17 @@ jobs:
       - name: Download staged artifacts
         uses: actions/download-artifact@v4
         with:
-          name: vision-pack-staged-${{ env.GPU_FAMILY }}
+          name: ${{ inputs.artifact_name }}
           path: staging/
-          run-id: ${{ steps.run.outputs.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Show staging layout
         run: |
           echo "=== Shared libraries ==="
           find staging/ -name "*.so*" | sort | head -30
+          echo ""
           echo "=== Manifest ==="
-          cat staging/vision-pack-manifest.json 2>/dev/null || echo "(no manifest)"
+          cat staging/vision-pack-manifest.json 2>/dev/null \
+            | python3 -m json.tool || echo "(no manifest)"
 
       - name: Determine package version
         id: version
@@ -84,10 +98,15 @@ jobs:
               || echo "0.1.0")
             VER="${VER#v}"
           fi
-          BUILD_ID="${{ steps.run.outputs.id }}"
+          # Build ID: use run_id for CI, date for nightly
+          if [ "${{ inputs.release_type }}" = "nightly" ]; then
+            BUILD_ID=$(date -u +%Y%m%d)
+          else
+            BUILD_ID="${{ github.run_id }}"
+          fi
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "build_id=${BUILD_ID}" >> "$GITHUB_OUTPUT"
-          echo "Package: ${VER}  Build: ${BUILD_ID}"
+          echo "Package: ${VER}  Build: ${BUILD_ID}  Type: ${{ inputs.release_type }}"
 
       - name: Configure CPack
         run: |
@@ -109,24 +128,19 @@ jobs:
           cpack -G RPM --verbose
           ls -lh *.rpm 2>/dev/null || echo "No .rpm files produced"
 
-      - name: Generate tarball
+      - name: Generate multiarch tarball
         run: |
           VER="${{ steps.version.outputs.version }}"
-          GPU="${{ env.GPU_FAMILY }}"
-          TARBALL="vision-pack-dist-linux-${GPU}-${VER}.tar.gz"
+          TARBALL="vision-pack-dist-linux-multiarch-${VER}.tar.gz"
           tar -czf "${TARBALL}" -C staging/ .
           ls -lh "${TARBALL}"
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
 
-      - name: Generate meta DEB packages (amdrocm-vision etc.)
+      - name: Generate meta DEB packages
         working-directory: pkg-build
         run: |
-          if command -v equivs-build >/dev/null 2>&1; then
-            cmake --build . --target package-meta-vision 2>/dev/null || \
-              echo "Meta package target not available — skipping"
-          else
-            echo "equivs-build not found — skipping meta-packages"
-          fi
+          cmake --build . --target package-meta-vision 2>/dev/null \
+            || echo "Meta packages skipped (equivs-build not available)"
 
       - name: Build APT repo metadata
         run: |
@@ -136,8 +150,7 @@ jobs:
             cd repo/deb
             dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
             dpkg-scanpackages . /dev/null > Packages
-            echo "APT repo:"
-            ls -lh
+            echo "APT repo: $(ls *.deb | wc -l) packages"
           fi
 
       - name: Build RPM repo metadata
@@ -146,63 +159,64 @@ jobs:
           cp pkg-build/*.rpm repo/rpm/ 2>/dev/null || true
           if ls repo/rpm/*.rpm 1>/dev/null 2>&1; then
             createrepo_c repo/rpm/
-            echo "RPM repo:"
-            ls -lh repo/rpm/
+            echo "RPM repo: $(ls repo/rpm/*.rpm | wc -l) packages"
           fi
 
       - name: Upload DEB packages
         uses: actions/upload-artifact@v4
         with:
-          name: vision-pack-deb-${{ env.GPU_FAMILY }}-${{ steps.version.outputs.version }}
+          name: vision-pack-deb-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_id }}
           path: |
             pkg-build/*.deb
             repo/deb/
-          retention-days: 30
+          retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
 
       - name: Upload RPM packages
         uses: actions/upload-artifact@v4
         with:
-          name: vision-pack-rpm-${{ env.GPU_FAMILY }}-${{ steps.version.outputs.version }}
+          name: vision-pack-rpm-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_id }}
           path: |
             pkg-build/*.rpm
             repo/rpm/
-          retention-days: 30
+          retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
 
       - name: Upload tarball
         uses: actions/upload-artifact@v4
         with:
-          name: vision-pack-tarball-${{ env.GPU_FAMILY }}-${{ steps.version.outputs.version }}
-          path: vision-pack-dist-linux-*.tar.gz
-          retention-days: 30
+          name: vision-pack-tarball-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_id }}
+          path: vision-pack-dist-linux-multiarch-*.tar.gz
+          retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
 
-      # Create a GitHub prerelease tagged nightly-<build_id> on main branch.
-      # The release notes are written to a temp file to avoid quoting issues.
-      - name: Create GitHub prerelease
-        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_run'
+      # Create a GitHub prerelease for nightly builds only.
+      # Tagged nightly-YYYYMMDD, replaces previous day's tag.
+      - name: Create GitHub prerelease (nightly only)
+        if: inputs.release_type == 'nightly'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VER="${{ steps.version.outputs.version }}"
           BUILD="${{ steps.version.outputs.build_id }}"
-          GPU="${{ env.GPU_FAMILY }}"
           ROCM="${{ env.ROCM_VERSION }}"
           TAG="nightly-${BUILD}"
+          SHA="${{ inputs.sha || github.sha }}"
 
+          # Replace previous nightly tag
           gh release delete "${TAG}" --yes 2>/dev/null || true
           git tag -d "${TAG}" 2>/dev/null || true
 
           cat > /tmp/release-notes.md << NOTES
-          Nightly build of amdrocm-vision packages.
+          Nightly build of AMD ROCm Computer Vision extension pack.
 
-          **ROCm version**: ${ROCM}
-          **GPU family**: ${GPU}
-          **Build**: ${BUILD}
+          **Version**: ${VER}
+          **ROCm**: ${ROCM}
+          **Commit**: ${SHA}
 
-          ## Packages
-          - \`amdrocm-mivisionx\` — OpenVX engine + RPP extension (libopenvx, libvxu, libvx_rpp)
-          - \`amdrocm-rocal\` — ROCm Augmentation Library + Python bindings
-          - \`amdrocm-roccv\` — ROCm GPU image processing + Python bindings
-          - \`amdrocm-rocpydecode\` — Python video/JPEG hardware decode bindings
+          ## Libraries
+          - **amdrocm-mivisionx** — MIVisionX OpenVX engine + RPP extension
+          - **amdrocm-rocal** — rocAL augmentation library + Python bindings
+          - **amdrocm-roccv** — rocCV GPU image processing + Python bindings
+          - **amdrocm-rocpydecode** — Python video/JPEG hardware decode
+          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, libprotobuf, liblmdb, libsndfile)
 
           ## Install (DEB)
           \`\`\`bash
@@ -210,25 +224,26 @@ jobs:
           dpkg -i amdrocm-rocal_${VER}_amd64.deb
           dpkg -i amdrocm-roccv_${VER}_amd64.deb
           dpkg -i amdrocm-rocpydecode_${VER}_amd64.deb
+          dpkg -i amdrocm-vision-sysdeps_${VER}_amd64.deb
           \`\`\`
 
-          Requires ROCm ${ROCM} or later.
+          Requires ROCm ${ROCM} or later installed at /opt/rocm.
           NOTES
 
           gh release create "${TAG}" \
             --prerelease \
-            --title "vision-pack nightly ${VER} (build ${BUILD})" \
+            --title "vision-pack nightly ${VER} (${BUILD})" \
             --notes-file /tmp/release-notes.md \
             pkg-build/*.deb \
             pkg-build/*.rpm \
-            vision-pack-dist-linux-*.tar.gz \
-            2>/dev/null || echo "Release creation skipped (no packages found)"
+            vision-pack-dist-linux-multiarch-*.tar.gz \
+            2>/dev/null || echo "Release upload skipped (no packages)"
 
       - name: Smoke test DEB install
         run: |
           if ls pkg-build/amdrocm-mivisionx_*.deb 1>/dev/null 2>&1; then
-            dpkg -i pkg-build/amdrocm-mivisionx_*.deb 2>/dev/null || \
-              dpkg --ignore-depends=amdrocm-rpp \
-                -i pkg-build/amdrocm-mivisionx_*.deb || \
-              echo "DEB install skipped (missing ROCm deps on packaging runner)"
+            dpkg -i pkg-build/amdrocm-mivisionx_*.deb 2>/dev/null \
+              || dpkg --ignore-depends=amdrocm-rpp \
+                   -i pkg-build/amdrocm-mivisionx_*.deb \
+              || echo "DEB install skipped (missing ROCm deps on packaging runner)"
           fi

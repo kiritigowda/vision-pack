@@ -1,0 +1,269 @@
+# vision-pack build workflow
+#
+# Builds all four ROCm CV libraries inside manylinux_2_28 against the
+# Quartz nightly SDK. Vision libs contain no GPU kernel code so a single
+# build covers all supported GPU families — no per-family matrix needed.
+#
+# Designed as a reusable workflow (workflow_call) so nightly.yml can call
+# it after bumping submodules, following TheRock's pattern of using one
+# workflow for both PR CI and nightly delivery.
+#
+# Outputs:
+#   vision-pack-staged-multiarch-<sha>   staged install tree (→ package.yml)
+#   ctest-results-<sha>                  CTest XML results
+
+name: build
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'mivisionx'
+      - 'rocal'
+      - 'rocCV'
+      - 'rocpydecode'
+      - 'third-party/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [main, develop]
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to build'
+        type: string
+        required: false
+        default: ''
+      rocm_sdk_date:
+        description: 'Quartz nightly date YYYYMMDD (empty = latest)'
+        type: string
+        required: false
+        default: ''
+      release_type:
+        description: 'ci | nightly — controls artifact retention'
+        type: string
+        required: false
+        default: 'ci'
+    outputs:
+      artifact_name:
+        description: 'Name of the uploaded staged artifact'
+        value: ${{ jobs.build.outputs.artifact_name }}
+      version:
+        description: 'Package version string'
+        value: ${{ jobs.build.outputs.version }}
+  workflow_dispatch:
+    inputs:
+      rocm_sdk_date:
+        description: 'Quartz nightly date YYYYMMDD (empty = latest)'
+        required: false
+        default: ''
+      release_type:
+        description: 'ci | nightly'
+        required: false
+        default: 'ci'
+
+env:
+  ROCM_PATH: /opt/rocm-nightly
+  CMAKE_BUILD_TYPE: Release
+  VP_BUILD_PARALLEL: 24
+
+jobs:
+  build:
+    # Vision libs have no GPU kernel code — one build covers all GPU families.
+    # Use manylinux_2_28 (same base as TheRock) for maximum portability.
+    runs-on: ubuntu-24.04
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
+      options: --user root
+
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      version: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      # manylinux_2_28 ships Python 3.12 at /opt/python/cp312-cp312/bin.
+      # Put it on PATH before anything else.
+      - name: Set up Python 3.12
+        run: echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+
+      # Only build-time tools from the OS — all runtime deps (turbojpeg,
+      # protobuf, lmdb, libsndfile) are built from source in third-party/
+      # and bundled into lib/rocm_sysdeps/lib/. ffmpeg/OpenCV excluded.
+      - name: Install build tools
+        run: |
+          dnf install -y \
+            cmake ninja-build \
+            python3-devel \
+            tar gzip curl make dpkg \
+            || true
+
+      # Download the Quartz nightly ROCm SDK tarball.
+      # Vision libs have no GPU kernel code so gfx110X (gfx11 family)
+      # provides a full SDK for building — headers, cmake, libs, compiler.
+      - name: Fetch Quartz nightly ROCm SDK
+        env:
+          SDK_DATE: ${{ inputs.rocm_sdk_date }}
+        run: |
+          ARGS="--gpu-family gfx110X --dest ${ROCM_PATH}"
+          if [ -n "${SDK_DATE}" ]; then
+            ARGS="${ARGS} --date ${SDK_DATE}"
+          fi
+          python3 build_tools/fetch_rocm_sdk.py ${ARGS}
+          echo "SDK cmake packages available:"
+          ls "${ROCM_PATH}/lib/cmake/" | head -20
+
+      # Extract dev+test packages from the nightly deb repo using dpkg-deb.
+      # The rpm repo is not reliably available; the deb repo always is.
+      # dpkg-deb --extract works on any Linux with no dpkg database needed.
+      #
+      # Packages:
+      #   amdrocm-rpp / -dev / -test       RPP (required by MIVisionX)
+      #   amdrocm-decode-dev / -test        rocdecode headers + utils sources
+      #   amdrocm-jpeg-dev / -test          rocJPEG headers + utils sources
+      - name: Install ROCm CV packages from nightly deb
+        run: |
+          DEB_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/deb"
+          LATEST=$(curl -sL "${DEB_BASE}/" \
+            | grep -o '[0-9]\{8\}-[0-9]*' | sort | tail -1)
+          if [ -z "${LATEST}" ]; then
+            echo "ERROR: could not find latest nightly deb build"
+            exit 1
+          fi
+          echo "Nightly deb build: ${LATEST}"
+          PACKAGES_GZ="${DEB_BASE}/${LATEST}/dists/stable/main/binary-amd64/Packages.gz"
+          PKG_TMP=$(mktemp)
+          curl -sL "${PACKAGES_GZ}" | zcat > "${PKG_TMP}"
+
+          for PKG in \
+            amdrocm-rpp amdrocm-rpp-dev amdrocm-rpp-test \
+            amdrocm-decode-dev amdrocm-decode-test \
+            amdrocm-jpeg-dev amdrocm-jpeg-test; do
+            FILENAME=$(awk "/^Package: ${PKG}$/{f=1} f && /^Filename:/{print \$2; exit}" \
+              "${PKG_TMP}")
+            if [ -z "${FILENAME}" ]; then
+              echo "  WARNING: ${PKG} not in index — skipping"
+              continue
+            fi
+            DEB=$(mktemp --suffix=.deb)
+            curl -fsSL "${DEB_BASE}/${LATEST}/${FILENAME}" -o "${DEB}"
+            dpkg-deb --extract "${DEB}" "${ROCM_PATH}"
+            rm -f "${DEB}"
+            echo "  ${PKG} -> ${ROCM_PATH}"
+          done
+          rm -f "${PKG_TMP}"
+
+          # Verify critical paths
+          for CHECK in \
+            "${ROCM_PATH}/include/rpp/rpp.h:rpp headers" \
+            "${ROCM_PATH}/share/rocdecode/utils:rocdecode utils" \
+            "${ROCM_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers"; do
+            PATH_CHECK="${CHECK%%:*}"
+            LABEL="${CHECK##*:}"
+            ls "${PATH_CHECK}" >/dev/null 2>&1 \
+              && echo "  ${LABEL}: OK" \
+              || echo "  ERROR: ${LABEL} not found at ${PATH_CHECK}"
+          done
+
+      - name: CMake configure
+        run: |
+          cmake -B build -S . \
+            -GNinja \
+            -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
+            -DROCM_PATH="${ROCM_PATH}" \
+            -DVISION_PACK_ENABLE_MIVISIONX=ON \
+            -DVISION_PACK_ENABLE_ROCAL=ON \
+            -DVISION_PACK_ENABLE_ROCCV=ON \
+            -DVISION_PACK_ENABLE_ROCPYDECODE=ON \
+            -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}"
+
+      - name: Build
+        run: cmake --build build --parallel "${VP_BUILD_PARALLEL}"
+
+      # Stage install — into build/staging/ (mirrors /opt/rocm layout).
+      # Bundled sysdeps also land here via the install() rules in third-party/.
+      - name: Install to staging
+        run: |
+          mkdir -p build/staging
+          for proj in mivisionx rocCV rocpydecode rocal; do
+            cmake --install "build/_subprojects/${proj}/build" \
+              --prefix build/staging
+          done
+          # Install bundled sysdeps (turbojpeg, protobuf, lmdb, libsndfile)
+          cmake --install build --prefix build/staging \
+            --component rocm-sysdeps-vision 2>/dev/null || true
+
+      - name: CTest — rocPyDecode
+        working-directory: build/_subprojects/rocpydecode/build
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib
+        run: |
+          ctest --output-on-failure --parallel 4 \
+            --test-output-size-passed 1024 \
+            --test-output-size-failed 102400 \
+            -T Test
+
+      - name: CTest — MIVisionX (CPU tests only)
+        working-directory: build/_subprojects/mivisionx/build
+        env:
+          PATH: ${{ github.workspace }}/build/staging/bin:${{ env.ROCM_PATH }}/bin:/usr/local/bin:/usr/bin:/bin
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib
+        run: |
+          ctest --output-on-failure --parallel 4 \
+            -R "openvx_gdf_tests_CPU|openvx_vision_coverage" \
+            --test-output-size-passed 1024 \
+            --test-output-size-failed 102400 \
+            -T Test
+        continue-on-error: true
+
+      - name: CTest — rocCV
+        working-directory: build/_subprojects/rocCV/build
+        env:
+          LD_LIBRARY_PATH: >-
+            ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib
+        run: |
+          COUNT=$(ctest -N 2>&1 | grep "Total Tests" | awk '{print $NF}')
+          if [ "${COUNT:-0}" -gt 0 ]; then
+            ctest --output-on-failure --parallel 4 -T Test
+          else
+            echo "rocCV: 0 tests registered (built with TESTS=OFF)"
+          fi
+        continue-on-error: true
+
+      - name: Collect build metadata
+        id: meta
+        run: |
+          VER=$(git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")
+          VER="${VER#v}"
+          SHA="${{ github.sha }}"
+          SHORT="${SHA:0:8}"
+          ARTIFACT="vision-pack-staged-multiarch-${SHORT}"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          printf '{"version":"%s","sha":"%s","rocm_path":"%s","build_type":"%s","release_type":"%s"}\n' \
+            "${VER}" "${SHA}" "${ROCM_PATH}" "${CMAKE_BUILD_TYPE}" \
+            "${{ inputs.release_type || 'ci' }}" \
+            > build/staging/vision-pack-manifest.json
+          echo "Version: ${VER}  Artifact: ${ARTIFACT}"
+
+      - name: Upload CTest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-results-${{ github.sha && fromJSON(format('["{0}"]', github.sha))[0] || 'unknown' }}
+          path: build/_subprojects/*/build/Testing/
+          retention-days: 7
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: build/staging/
+          # Nightly artifacts kept longer than CI artifacts
+          retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}

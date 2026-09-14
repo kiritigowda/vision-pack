@@ -1,0 +1,92 @@
+# vision-pack nightly workflow
+#
+# Runs nightly at 02:00 UTC. Bumps all four vision library submodules to
+# their latest develop HEAD, calls the reusable build workflow, then calls
+# the package workflow to produce DEB/RPM/TGZ and publish a GitHub prerelease.
+#
+# Follows TheRock's pattern: one build workflow used for both PR CI and
+# nightly, with the nightly orchestrator handling submodule bumps and
+# downstream packaging.
+
+name: nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      rocm_sdk_date:
+        description: 'Quartz nightly date YYYYMMDD (empty = latest)'
+        required: false
+        default: ''
+      skip_bump:
+        description: 'Skip submodule bump (use current SHAs)'
+        type: boolean
+        default: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Bump vision library submodules to latest develop HEAD
+  # ---------------------------------------------------------------------------
+  bump-submodules:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      bumped: ${{ steps.commit.outputs.bumped }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump vision library submodules to develop HEAD
+        if: inputs.skip_bump != true
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git submodule update --remote mivisionx rocal rocCV rocpydecode
+          git add mivisionx rocal rocCV rocpydecode
+
+      - name: Commit and push if changed
+        id: commit
+        run: |
+          if git diff --cached --quiet; then
+            echo "No submodule changes"
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          else
+            SHAS=$(git submodule status mivisionx rocal rocCV rocpydecode \
+              | awk '{printf "%s %.8s\n", $2, $1}' | tr '\n' ',' | sed 's/,$//')
+            MSG=$(printf 'chore(nightly): bump vision submodules to develop HEAD\n\n%s\n\n[skip ci]' "${SHAS}")
+            git commit -m "${MSG}"
+            git push
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 2. Build (reusable workflow) — single pass, all GPU families
+  # ---------------------------------------------------------------------------
+  build:
+    needs: bump-submodules
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.bump-submodules.outputs.sha }}
+      rocm_sdk_date: ${{ inputs.rocm_sdk_date || '' }}
+      release_type: nightly
+
+  # ---------------------------------------------------------------------------
+  # 3. Package — DEB + RPM + TGZ + GitHub prerelease
+  # ---------------------------------------------------------------------------
+  package:
+    needs: [bump-submodules, build]
+    uses: ./.github/workflows/package.yml
+    with:
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      package_version: ${{ needs.build.outputs.version }}
+      release_type: nightly
+      sha: ${{ needs.bump-submodules.outputs.sha }}
+    secrets: inherit
