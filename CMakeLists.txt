@@ -150,15 +150,22 @@ if(VISION_PACK_ENABLE_ROCAL)
   endif()
 
   if(VISION_PACK_BUNDLE_PROTOBUF)
-    list(APPEND _rocal_extra_deps libprotobuf)
+    list(APPEND _rocal_extra_deps libprotobuf protoc)
+    # rocAL calls find_package(Protobuf QUIET) with no CONFIG keyword, so the
+    # builtin FindProtobuf.cmake (MODULE mode) runs. Config-package hints
+    # (Protobuf_ROOT, protobuf_MODULE_COMPATIBLE) are inert in module mode, so
+    # seed the exact result cache variables FindProtobuf reads. Pre-set as
+    # cache entries, its find_library/find_path/find_program calls are no-ops
+    # and it resolves the bundled build tree — setting Protobuf_FOUND and the
+    # PROTOBUF_LIBRARIES/INCLUDE_DIRS that rocAL's dep check and codegen need.
+    set(_pb_src "${CMAKE_CURRENT_SOURCE_DIR}/third-party/protobuf/src")
+    set(_pb_build "${CMAKE_BINARY_DIR}/third-party/protobuf-build")
     list(APPEND _rocal_cmake_args
-      "-DProtobuf_ROOT=${CMAKE_BINARY_DIR}/third-party/protobuf-build"
-      "-DCMAKE_POLICY_DEFAULT_CMP0074=NEW"
-      # protobuf v3.21.x config-mode find_package sets up protobuf:: targets
-      # but does NOT set Protobuf_FOUND/PROTOBUF_LIBRARIES unless MODULE_COMPATIBLE
-      # is ON. rocAL checks Protobuf_FOUND and uses PROTOBUF_LIBRARIES, so this
-      # flag is required or rocAL's dependency check fails at configure time.
-      "-Dprotobuf_MODULE_COMPATIBLE=ON"
+      "-DProtobuf_INCLUDE_DIR=${_pb_src}"
+      "-DProtobuf_LIBRARY_RELEASE=${_pb_build}/libprotobuf.a"
+      "-DProtobuf_LITE_LIBRARY_RELEASE=${_pb_build}/libprotobuf-lite.a"
+      "-DProtobuf_PROTOC_LIBRARY_RELEASE=${_pb_build}/libprotoc.a"
+      "-DProtobuf_PROTOC_EXECUTABLE=${_pb_build}/protoc"
     )
   endif()
 
