@@ -141,42 +141,59 @@ jobs:
         run: |
           DEB_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/deb"
 
-          # Find the latest deb build that contains rocvideodecode/ in
-          # amdrocm-decode-test10.1. The 20260822 build dropped it;
-          # 20260805 has it. Walk builds newest-first and verify.
+          # amdrocm-decode-test10.1 dropped utils/rocvideodecode/roc_video_dec.cpp
+          # after build 20260805 (regression: ROCm/rocm-systems#11609).
+          # We cannot distinguish good from bad builds from the Packages.gz index
+          # (same installed-size; no Contents index available). Instead, download
+          # each candidate deb and check for roc_video_dec.cpp directly.
+          # To avoid downloading all 82MB debs, check newest builds first —
+          # if AMD fixes the regression, the loop exits on the first build.
+          PINNED_GOOD="20260805-30962830816"   # last known-good build
           BUILDS=$(curl -sL "${DEB_BASE}/" \
-            | grep -o '[0-9]\{8\}-[0-9]*' | sort -r | head -10)
+            | grep -o '[0-9]\{8\}-[0-9]*' | sort -r | head -15)
+          # Prepend pinned-good at the end as guaranteed fallback
+          BUILDS="${BUILDS} ${PINNED_GOOD}"
           LATEST=""
           for BUILD in ${BUILDS}; do
             PKG_GZ="${DEB_BASE}/${BUILD}/dists/stable/main/binary-amd64/Packages.gz"
-            FNAME=$(curl -sL "${PKG_GZ}" | zcat 2>/dev/null \
+            FNAME=$(curl -sL "${PKG_GZ}" 2>/dev/null | zcat 2>/dev/null \
               | awk '/^Package: amdrocm-decode-test10\.1$/{f=1} f && /^Filename:/{print $2; exit}')
-            if [ -z "${FNAME}" ]; then continue; fi
+            if [ -z "${FNAME}" ]; then
+              echo "  Build ${BUILD}: package not found, skipping"
+              continue
+            fi
+            echo "  Checking build ${BUILD} for roc_video_dec.cpp..."
             DEB_TMP=$(mktemp --suffix=.deb)
             curl -fsSL "${DEB_BASE}/${BUILD}/${FNAME}" -o "${DEB_TMP}" 2>/dev/null
             if dpkg-deb --contents "${DEB_TMP}" 2>/dev/null \
-                | grep -q 'rocvideodecode'; then
+                | grep -qF 'roc_video_dec.cpp'; then
               LATEST="${BUILD}"
               rm -f "${DEB_TMP}"
+              echo "  Found roc_video_dec.cpp in build ${BUILD}"
               break
             fi
             rm -f "${DEB_TMP}"
+            echo "  Build ${BUILD}: roc_video_dec.cpp missing, trying older build"
           done
           if [ -z "${LATEST}" ]; then
-            echo "ERROR: could not find a nightly deb build with rocvideodecode"
+            echo "ERROR: no deb build found with roc_video_dec.cpp"
+            echo "Upstream issue: https://github.com/ROCm/rocm-systems/issues/11609"
             exit 1
           fi
-          echo "Nightly deb build (with rocvideodecode): ${LATEST}"
+          echo "Using nightly deb build: ${LATEST}"
           PKG_TMP=$(mktemp)
           curl -sL "${DEB_BASE}/${LATEST}/dists/stable/main/binary-amd64/Packages.gz" \
             | zcat > "${PKG_TMP}"
 
           # Use versioned 10.1 packages — unversioned ones are empty stubs.
-          # Extract to / so ./opt/rocm/core-10.1/... lands at the correct path.
-          # amdrocm-decode-test10.1 is large (video files) — verify it extracts.
+          # For most packages: extract directly to / (fast, small packages).
+          # For amdrocm-decode-test10.1 (82MB, contains large video files):
+          # extract to a temp dir and selectively copy only the needed utils/
+          # and share/ subdirs — skip the video/ directory to avoid container
+          # overlay filesystem issues with large files.
           for PKG in \
             amdrocm-rpp10.1 amdrocm-rpp-dev10.1 amdrocm-rpp-test10.1 \
-            amdrocm-decode-dev10.1 amdrocm-decode-test10.1 \
+            amdrocm-decode-dev10.1 \
             amdrocm-jpeg-dev10.1 amdrocm-jpeg-test10.1; do
             FILENAME=$(awk "/^Package: ${PKG}$/{f=1} f && /^Filename:/{print \$2; exit}" \
               "${PKG_TMP}")
@@ -187,16 +204,52 @@ jobs:
             DEB=$(mktemp --suffix=.deb)
             echo "  Downloading ${PKG}..."
             curl -fsSL "${DEB_BASE}/${LATEST}/${FILENAME}" -o "${DEB}"
-            echo "  Extracting ${PKG} ($(du -sh "${DEB}" | cut -f1))..."
             dpkg-deb --extract "${DEB}" /
             EXTRACT_RC=$?
             rm -f "${DEB}"
-            if [ "${EXTRACT_RC}" -ne 0 ]; then
-              echo "  ERROR: extraction of ${PKG} failed (exit ${EXTRACT_RC})"
-              exit 1
-            fi
+            [ "${EXTRACT_RC}" -ne 0 ] && echo "  ERROR: ${PKG} failed" && exit 1
             echo "  ${PKG} -> OK"
           done
+
+          # amdrocm-decode-test10.1 contains large video files (>80MB total).
+          # Extract to temp dir and copy only share/ and include/ — skip video/.
+          PKG="amdrocm-decode-test10.1"
+          FILENAME=$(awk "/^Package: ${PKG}$/{f=1} f && /^Filename:/{print \$2; exit}" \
+            "${PKG_TMP}")
+          if [ -z "${FILENAME}" ]; then
+            echo "ERROR: ${PKG} not found in index"
+            exit 1
+          fi
+          DEB=$(mktemp --suffix=.deb)
+          EXTRACT_TMP=$(mktemp -d)
+          echo "  Downloading ${PKG} (large — extracting selectively)..."
+          curl -fsSL "${DEB_BASE}/${LATEST}/${FILENAME}" -o "${DEB}"
+          dpkg-deb --extract "${DEB}" "${EXTRACT_TMP}"
+          rm -f "${DEB}"
+          # Copy everything EXCEPT the video/ directory (large, not needed for build)
+          CORE_SRC="${EXTRACT_TMP}/opt/rocm/core-10.1"
+          CORE_DST="/opt/rocm/core-10.1"
+          if [ -d "${CORE_SRC}" ]; then
+            mkdir -p "${CORE_DST}"
+            # Copy share/rocdecode excluding video/
+            if [ -d "${CORE_SRC}/share/rocdecode" ]; then
+              mkdir -p "${CORE_DST}/share/rocdecode"
+              for SUBDIR in utils samples test cmake; do
+                [ -d "${CORE_SRC}/share/rocdecode/${SUBDIR}" ] && \
+                  cp -r "${CORE_SRC}/share/rocdecode/${SUBDIR}" "${CORE_DST}/share/rocdecode/"
+              done
+            fi
+            # Copy any other dirs (include, lib, etc.) that may be in this pkg
+            for D in include lib; do
+              [ -d "${CORE_SRC}/${D}" ] && cp -r "${CORE_SRC}/${D}" "${CORE_DST}/"
+            done
+          fi
+          rm -rf "${EXTRACT_TMP}"
+          # Verify the key file landed
+          ls "/opt/rocm/core-10.1/share/rocdecode/utils/rocvideodecode/roc_video_dec.cpp" \
+            >/dev/null 2>&1 && echo "  ${PKG} -> OK (roc_video_dec.cpp present)" \
+            || { echo "  ERROR: roc_video_dec.cpp missing after selective extract"; exit 1; }
+
           rm -f "${PKG_TMP}"
 
           # The core-10.1 overlay contains rpp, rocdecode, rocjpeg headers/cmake.
