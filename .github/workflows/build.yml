@@ -313,6 +313,8 @@ jobs:
             -DVISION_PACK_ENABLE_ROCPYDECODE=ON \
             -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}" \
             ${PYTHON_ARGS}
+          # Log which Python was selected so sub-build failures are diagnosable
+          cmake -B build -S . -N -L 2>/dev/null | grep -i "Python3_ROOT\|Python3_EXECUTABLE" || true
 
       - name: Build
         run: cmake --build build --parallel "${VP_BUILD_PARALLEL}"
