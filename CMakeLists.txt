@@ -175,14 +175,19 @@ if(VISION_PACK_ENABLE_ROCAL)
     list(APPEND _rocal_cmake_args
       "-DProtobuf_ROOT=${CMAKE_BINARY_DIR}/third-party/protobuf-build"
       "-DCMAKE_POLICY_DEFAULT_CMP0074=NEW"
+      # protobuf v3.21.x config-mode find_package sets up protobuf:: targets
+      # but does NOT set Protobuf_FOUND/PROTOBUF_LIBRARIES unless MODULE_COMPATIBLE
+      # is ON. rocAL checks Protobuf_FOUND and uses PROTOBUF_LIBRARIES, so this
+      # flag is required or rocAL's dependency check fails at configure time.
+      "-Dprotobuf_MODULE_COMPATIBLE=ON"
     )
   endif()
 
   if(VISION_PACK_BUNDLE_LMDB)
     list(APPEND _rocal_extra_deps lmdb_external)
     list(APPEND _rocal_cmake_args
-      "-DLMDB_INCLUDE_DIR=${_bstage}/include"
-      "-DLMDB_LIBRARY=${_bstage}/lib/liblmdb.so"
+      # rocAL's FindLMDB.cmake searches via ${LMDB_DIR}/include and ${LMDB_DIR}/lib
+      "-DLMDB_DIR=${_bstage}"
     )
   endif()
 
