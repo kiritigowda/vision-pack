@@ -140,13 +140,33 @@ jobs:
       - name: Install ROCm CV packages from nightly deb
         run: |
           DEB_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/deb"
-          LATEST=$(curl -sL "${DEB_BASE}/" \
-            | grep -o '[0-9]\{8\}-[0-9]*' | sort | tail -1)
+
+          # Find the latest deb build that contains rocvideodecode/ in
+          # amdrocm-decode-test10.1. The 20260822 build dropped it;
+          # 20260805 has it. Walk builds newest-first and verify.
+          BUILDS=$(curl -sL "${DEB_BASE}/" \
+            | grep -o '[0-9]\{8\}-[0-9]*' | sort -r | head -10)
+          LATEST=""
+          for BUILD in ${BUILDS}; do
+            PKG_GZ="${DEB_BASE}/${BUILD}/dists/stable/main/binary-amd64/Packages.gz"
+            FNAME=$(curl -sL "${PKG_GZ}" | zcat 2>/dev/null \
+              | awk '/^Package: amdrocm-decode-test10\.1$/{f=1} f && /^Filename:/{print $2; exit}')
+            if [ -z "${FNAME}" ]; then continue; fi
+            DEB_TMP=$(mktemp --suffix=.deb)
+            curl -fsSL "${DEB_BASE}/${BUILD}/${FNAME}" -o "${DEB_TMP}" 2>/dev/null
+            if dpkg-deb --contents "${DEB_TMP}" 2>/dev/null \
+                | grep -q 'rocvideodecode'; then
+              LATEST="${BUILD}"
+              rm -f "${DEB_TMP}"
+              break
+            fi
+            rm -f "${DEB_TMP}"
+          done
           if [ -z "${LATEST}" ]; then
-            echo "ERROR: could not find latest nightly deb build"
+            echo "ERROR: could not find a nightly deb build with rocvideodecode"
             exit 1
           fi
-          echo "Nightly deb build: ${LATEST}"
+          echo "Nightly deb build (with rocvideodecode): ${LATEST}"
           PKG_TMP=$(mktemp)
           curl -sL "${DEB_BASE}/${LATEST}/dists/stable/main/binary-amd64/Packages.gz" \
             | zcat > "${PKG_TMP}"
