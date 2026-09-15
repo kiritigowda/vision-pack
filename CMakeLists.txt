@@ -123,9 +123,17 @@ if(NOT DEFINED ROCPYDECODE_ROCM_PATH)
 endif()
 message(STATUS "[vision-pack] rocPyDecode ROCM_PATH: ${ROCPYDECODE_ROCM_PATH}")
 if(VISION_PACK_ENABLE_ROCPYDECODE)
+  set(_rocpydecode_cmake_args "-DROCM_PATH=${ROCPYDECODE_ROCM_PATH}")
+  # rocpydecode calls find_package(Python3 ... Development) which needs
+  # libpython3.x.so. Forward Python3_ROOT_DIR if set (e.g. to
+  # /opt/python-shared in manylinux where the default Python is static).
+  # Upstream fix tracked: https://github.com/ROCm/rocPyDecode/issues/290
+  if(Python3_ROOT_DIR)
+    list(APPEND _rocpydecode_cmake_args "-DPython3_ROOT_DIR=${Python3_ROOT_DIR}")
+  endif()
   vision_pack_subproject_declare(rocpydecode
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocpydecode"
-    CMAKE_ARGS "-DROCM_PATH=${ROCPYDECODE_ROCM_PATH}"
+    CMAKE_ARGS ${_rocpydecode_cmake_args}
   )
 endif()
 

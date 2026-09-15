@@ -205,10 +205,6 @@ function(vision_pack_subproject_activate)
         # that the top-level project was configured with.
         "-DCMAKE_C_COMPILER:STRING=${ROCM_PATH}/lib/llvm/bin/amdclang"
         "-DCMAKE_CXX_COMPILER:STRING=${ROCM_PATH}/lib/llvm/bin/amdclang++"
-        # Forward Python3_ROOT_DIR if set at the top level (e.g. to
-        # /opt/python-shared/cp312-cp312 in manylinux where the default
-        # /opt/python build lacks libpython.so needed for Development.Embed).
-        $<$<BOOL:${Python3_ROOT_DIR}>:-DPython3_ROOT_DIR:PATH=${Python3_ROOT_DIR}>
     )
 
     # Wire regular cmake targets (add_subdirectory) as dependencies separately
