@@ -256,28 +256,31 @@ jobs:
           CORE_PATH="/opt/rocm/core-10.1"
           echo "ROCM_CORE_PATH=${CORE_PATH}" >> "$GITHUB_ENV"
 
+          # Debug: show what actually landed in core-10.1/share/rocdecode
+          echo "=== /opt/rocm/core-10.1/share/rocdecode ==="
+          find "${CORE_PATH}/share/rocdecode" -maxdepth 2 2>/dev/null \
+            | sort | head -20 || echo "(directory missing)"
+
           # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils.
-          # Symlink the extracted rocdecode share into the SDK tarball path.
-          # Must wait until after deb extraction completes.
-          if [ -d "${CORE_PATH}/share/rocdecode" ]; then
-            mkdir -p "${ROCM_PATH}/share"
-            ln -sfn "${CORE_PATH}/share/rocdecode" "${ROCM_PATH}/share/rocdecode"
-            echo "  symlink: ${ROCM_PATH}/share/rocdecode -> ${CORE_PATH}/share/rocdecode"
-          else
-            echo "  ERROR: ${CORE_PATH}/share/rocdecode not found after extraction"
-            exit 1
-          fi
+          # Remove any existing dir/symlink first, then create fresh symlink.
+          # ln -sfn is unsafe when target is an existing directory — it nests.
+          ROCM_ROCDECODE="${ROCM_PATH}/share/rocdecode"
+          mkdir -p "${ROCM_PATH}/share"
+          rm -rf "${ROCM_ROCDECODE}"
+          ln -s "${CORE_PATH}/share/rocdecode" "${ROCM_ROCDECODE}"
+          echo "  symlink: ${ROCM_ROCDECODE} -> ${CORE_PATH}/share/rocdecode"
+          echo "  symlink target exists: $([ -d "${ROCM_ROCDECODE}" ] && echo YES || echo NO)"
 
           # Verify all critical paths
           for CHECK in \
             "${CORE_PATH}/include/rpp/rpp.h:rpp headers" \
-            "${ROCM_PATH}/share/rocdecode/utils/rocvideodecode:rocdecode utils/rocvideodecode" \
+            "${ROCM_ROCDECODE}/utils/rocvideodecode/roc_video_dec.cpp:roc_video_dec.cpp" \
             "${CORE_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers"; do
             PATH_CHECK="${CHECK%%:*}"
             LABEL="${CHECK##*:}"
             ls "${PATH_CHECK}" >/dev/null 2>&1 \
               && echo "  ${LABEL}: OK" \
-              || { echo "  ERROR: ${LABEL} not found at ${PATH_CHECK}"; exit 1; }
+              || { echo "  ERROR: ${LABEL} not found"; exit 1; }
           done
 
       - name: CMake configure
