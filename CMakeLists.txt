@@ -45,6 +45,11 @@ option(VISION_PACK_ENABLE_ROCAL       "Build rocAL"        ON)
 option(VISION_PACK_ENABLE_ROCCV       "Build rocCV"        ON)
 option(VISION_PACK_ENABLE_ROCPYDECODE "Build rocPyDecode"  ON)
 
+# Build each subproject's test suite. Off by default; CI turns this ON so the
+# separate test stage has test binaries to run. rocCV gates its tests behind
+# its own TESTS option (default OFF), so we forward -DTESTS=ON when set.
+option(VISION_PACK_BUILD_TESTS        "Build subproject test suites"  OFF)
+
 # ---------------------------------------------------------------------------
 # Build parallelism for sub-builds
 # ---------------------------------------------------------------------------
@@ -92,6 +97,8 @@ if(VISION_PACK_ENABLE_ROCCV)
       -DBUILD_PYPACKAGE=ON
       "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
       -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
+      # rocCV gates its test suite behind its own TESTS option (default OFF).
+      -DTESTS=$<IF:$<BOOL:${VISION_PACK_BUILD_TESTS}>,ON,OFF>
       # Forward Python3_ROOT_DIR if set (e.g. to /opt/python-shared/cp312-cp312
       # in manylinux where the static /opt/python build lacks libpython.so)
       $<$<BOOL:${Python3_ROOT_DIR}>:-DPython3_ROOT_DIR=${Python3_ROOT_DIR}>

@@ -59,6 +59,9 @@ on:
       artifact_name:
         description: 'Name of the uploaded staged artifact'
         value: ${{ jobs.build.outputs.artifact_name }}
+      buildtree_artifact:
+        description: 'Name of the uploaded build-tree artifact (for the test stage)'
+        value: ${{ jobs.build.outputs.buildtree_artifact }}
       version:
         description: 'Package version string'
         value: ${{ jobs.build.outputs.version }}
@@ -107,6 +110,7 @@ jobs:
 
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      buildtree_artifact: ${{ steps.meta.outputs.buildtree_artifact }}
       version: ${{ steps.meta.outputs.version }}
 
     steps:
@@ -197,7 +201,8 @@ jobs:
             -DVISION_PACK_ENABLE_MIVISIONX=ON \
             -DVISION_PACK_ENABLE_ROCAL=ON \
             -DVISION_PACK_ENABLE_ROCCV=ON \
-            -DVISION_PACK_ENABLE_ROCPYDECODE=ON \
+            -DVISION_PACK_ENABLE_ROCPYDECODE=OFF \
+            -DVISION_PACK_BUILD_TESTS=ON \
             -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}" \
             ${PYTHON_ARGS}
           # Log which Python was selected so sub-build failures are diagnosable
@@ -211,7 +216,7 @@ jobs:
       - name: Install to staging
         run: |
           mkdir -p build/staging
-          for proj in mivisionx rocCV rocpydecode rocal; do
+          for proj in mivisionx rocCV rocal; do
             cmake --install "build/_subprojects/${proj}/build" \
               --prefix build/staging
           done
@@ -219,42 +224,27 @@ jobs:
           cmake --install build --prefix build/staging \
             --component rocm-sysdeps-vision 2>/dev/null || true
 
-      - name: CTest — rocPyDecode
-        working-directory: build/_subprojects/rocpydecode/build
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib
+      # Fail fast if the staged install is missing anything the packaging or
+      # test stages rely on — libs, the runvx tool, and rocAL's test dataset.
+      - name: Verify install
         run: |
-          ctest --output-on-failure --parallel 4 \
-            --test-output-size-passed 1024 \
-            --test-output-size-failed 102400 \
-            -T Test
-
-      - name: CTest — MIVisionX (CPU tests only)
-        working-directory: build/_subprojects/mivisionx/build
-        env:
-          PATH: ${{ github.workspace }}/build/staging/bin:${{ env.ROCM_PATH }}/bin:/usr/local/bin:/usr/bin:/bin
-          LD_LIBRARY_PATH: ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib
-        run: |
-          ctest --output-on-failure --parallel 4 \
-            -R "openvx_gdf_tests_CPU|openvx_vision_coverage" \
-            --test-output-size-passed 1024 \
-            --test-output-size-failed 102400 \
-            -T Test
-        continue-on-error: true
-
-      - name: CTest — rocCV
-        working-directory: build/_subprojects/rocCV/build
-        env:
-          LD_LIBRARY_PATH: >-
-            ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib
-        run: |
-          COUNT=$(ctest -N 2>&1 | grep "Total Tests" | awk '{print $NF}')
-          if [ "${COUNT:-0}" -gt 0 ]; then
-            ctest --output-on-failure --parallel 4 -T Test
-          else
-            echo "rocCV: 0 tests registered (built with TESTS=OFF)"
-          fi
-        continue-on-error: true
+          FAIL=0
+          for CHECK in \
+            "build/staging/lib/libopenvx.so:mivisionx libopenvx" \
+            "build/staging/lib/librocal.so:rocAL librocal" \
+            "build/staging/lib/libroccv.so:rocCV libroccv" \
+            "build/staging/bin/runvx:mivisionx runvx tool" \
+            "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data"; do
+            PATH_CHECK="${CHECK%%:*}"
+            LABEL="${CHECK##*:}"
+            if ls "${PATH_CHECK}" >/dev/null 2>&1; then
+              echo "  ${LABEL}: OK"
+            else
+              echo "  ERROR: ${LABEL} missing (${PATH_CHECK})"
+              FAIL=1
+            fi
+          done
+          [ "${FAIL}" -eq 0 ] || { echo "Staged install verification failed"; exit 1; }
 
       - name: Collect build metadata
         id: meta
@@ -264,21 +254,27 @@ jobs:
           SHA="${{ github.sha }}"
           SHORT="${SHA:0:8}"
           ARTIFACT="vision-pack-staged-multiarch-${SHORT}"
+          BUILDTREE="vision-pack-buildtree-${SHORT}"
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          echo "buildtree_artifact=${BUILDTREE}" >> "$GITHUB_OUTPUT"
           printf '{"version":"%s","sha":"%s","rocm_path":"%s","build_type":"%s","release_type":"%s"}\n' \
             "${VER}" "${SHA}" "${ROCM_PATH}" "${CMAKE_BUILD_TYPE}" \
             "${{ inputs.release_type || 'ci' }}" \
             > build/staging/vision-pack-manifest.json
-          echo "Version: ${VER}  Artifact: ${ARTIFACT}"
+          echo "Version: ${VER}  Artifact: ${ARTIFACT}  BuildTree: ${BUILDTREE}"
 
-      - name: Upload CTest results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ctest-results-${{ github.sha && fromJSON(format('["{0}"]', github.sha))[0] || 'unknown' }}
-          path: build/_subprojects/*/build/Testing/
-          retention-days: 7
+      # Tar the per-library build trees the test stage runs from. ctest executes
+      # from build/_subprojects/<lib>/build (test binaries + CTestTestfile.cmake),
+      # not the staging install tree. tar preserves exec bits + symlinks that
+      # upload-artifact@v4's zip would otherwise drop, keeping binaries runnable.
+      - name: Package build tree for tests
+        run: |
+          tar -czf build-tree.tgz \
+            build/_subprojects/mivisionx/build \
+            build/_subprojects/rocCV/build \
+            build/_subprojects/rocal/build
+          echo "build-tree.tgz size: $(du -h build-tree.tgz | cut -f1)"
 
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v4
@@ -287,3 +283,134 @@ jobs:
           path: build/staging/
           # Nightly artifacts kept longer than CI artifacts
           retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
+
+      - name: Upload build-tree artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.buildtree_artifact }}
+          path: build-tree.tgz
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Test stage — one matrix leg per library, running in parallel. Each leg pulls
+  # the staged install + build-tree artifacts, re-fetches the SDK for runtime
+  # libs (and, for rocAL, the toolchain its --build-and-test tests recompile
+  # with), then runs that library's CPU-runnable ctests. The runner has no GPU,
+  # so legs are non-blocking (continue-on-error) — GPU-variant tests error but
+  # do not fail the pipeline. rocPyDecode is disabled for now.
+  # ---------------------------------------------------------------------------
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:cf4f6d9909056906e4a1c0bc4c245658a0af4c6a6174082a86adfa2d518b7aeb
+      options: --user root
+      env:
+        ROCM_PATH: /opt/rocm-nightly
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lib: mivisionx
+          - lib: rocCV
+          - lib: rocal
+          # - lib: rocpydecode   # disabled for now
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Install extra build tools
+        run: |
+          yum install -y python3-devel make curl 2>/dev/null || true
+          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+
+      # Re-fetch the SDK: provides runtime .so's for all legs, and for rocAL the
+      # amdclang++ toolchain its ctests recompile with (--build-and-test).
+      - name: Fetch nightly ROCm SDK
+        env:
+          SDK_DATE: ${{ inputs.rocm_sdk_date }}
+          SDK_FAMILY: ${{ inputs.rocm_sdk_family }}
+          SDK_URL: ${{ inputs.rocm_sdk_url }}
+        run: |
+          ARGS="--dest ${ROCM_PATH}"
+          if [ -n "${SDK_URL}" ]; then
+            ARGS="${ARGS} --url ${SDK_URL}"
+          else
+            FAMILY="${SDK_FAMILY:-${ROCM_SDK_FAMILY_DEFAULT}}"
+            ARGS="${ARGS} --gpu-family ${FAMILY}"
+            [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
+          fi
+          python3 build_tools/fetch_rocm_sdk.py ${ARGS}
+
+      - name: Download staged install
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: build/staging
+
+      - name: Download build tree
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.buildtree_artifact }}
+          path: .
+
+      - name: Restore build tree
+        run: |
+          tar -xzf build-tree.tgz
+          ls -d build/_subprojects/*/build
+
+      # rocAL ctests read a hardcoded ${ROCM_PATH}/share/rocal/test/data/ path
+      # baked into CTestTestfile.cmake at configure time. Land the staged data
+      # under the SDK prefix so those paths resolve.
+      - name: Stage rocAL test data into ROCM_PATH
+        if: matrix.lib == 'rocal'
+        run: |
+          mkdir -p "${ROCM_PATH}/share"
+          cp -r build/staging/share/rocal "${ROCM_PATH}/share/"
+          ls "${ROCM_PATH}/share/rocal/test/data/images/AMD-tinyDataSet" >/dev/null \
+            && echo "rocAL test data staged" \
+            || { echo "ERROR: rocAL test data not staged"; exit 1; }
+
+      - name: CTest — ${{ matrix.lib }}
+        working-directory: build/_subprojects/${{ matrix.lib }}/build
+        continue-on-error: true
+        env:
+          PATH: ${{ github.workspace }}/build/staging/bin:${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
+          LD_LIBRARY_PATH: >-
+            ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib
+          AGO_DEFAULT_TARGET: CPU
+        run: |
+          case "${{ matrix.lib }}" in
+            mivisionx)
+              FILTER='-R openvx_gdf_tests_CPU|openvx_vision_coverage' ;;
+            rocal)
+              # CPU-runnable tests only (basic_test_cpu, unit_tests_cpu, ...).
+              FILTER='-R _cpu$' ;;
+            rocCV)
+              FILTER='' ;;
+          esac
+
+          COUNT=$(ctest -N 2>&1 | awk '/Total Tests/{print $NF}')
+          echo "Registered tests: ${COUNT:-0}"
+          if [ "${COUNT:-0}" -eq 0 ]; then
+            echo "${{ matrix.lib }}: 0 tests registered — nothing to run"
+            exit 0
+          fi
+
+          ctest --output-on-failure --parallel 4 \
+            ${FILTER} \
+            --test-output-size-passed 1024 \
+            --test-output-size-failed 102400 \
+            -T Test
+
+      - name: Upload CTest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-results-${{ matrix.lib }}-${{ github.sha }}
+          path: build/_subprojects/${{ matrix.lib }}/build/Testing/
+          retention-days: 7
