@@ -46,7 +46,7 @@ on:
       rocm_version:
         description: 'ROCm version this was built against'
         required: false
-        default: '10.1.0'
+        default: '10.2.0'
       release_type:
         description: 'ci | nightly'
         required: false
@@ -60,7 +60,7 @@ jobs:
       options: --user root
 
     env:
-      ROCM_VERSION: ${{ inputs.rocm_version || '10.1.0' }}
+      ROCM_VERSION: ${{ inputs.rocm_version || '10.2.0' }}
 
     steps:
       - uses: actions/checkout@v4

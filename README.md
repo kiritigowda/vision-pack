@@ -55,7 +55,8 @@ vision-pack/
 │   ├── CMakeLists.txt                  CPack config (DEB/RPM/TGZ)
 │   └── meta/amdrocm-vision.control.in  meta-package template
 ├── .github/workflows/
-│   ├── ci.yml                          build + test (manylinux_2_28)
+│   ├── build.yml                       build + test (manylinux_2_28)
+│   ├── nightly.yml                     submodule bump → build → package
 │   └── package.yml                     CPack → DEB/RPM/TGZ + GitHub release
 │
 ├── mivisionx/      → ROCm/MIVisionX@develop
@@ -79,34 +80,22 @@ vision-pack/
 
 ### ROCm SDK
 
-Install ROCm 10.1 or later. The nightly SDK from Quartz is used for CI builds.
-For local development on Ubuntu 22.04/24.04:
+Install ROCm 10.2 or later. CI uses the nightly **dcgpu-tests** SDK tarball,
+which carries the full SDK (HIP, compiler, `rocm_sysdeps`) *plus* the rpp,
+rocDecode, and rocJPEG headers/cmake configs and the rocDecode build utils
+(`share/rocdecode/utils`) all under a single prefix — no separate CV package
+install is needed.
 
 ```bash
-# Add Quartz nightly deb repo (replace date with latest available)
-echo 'deb [arch=amd64 trusted=yes] https://rocm.nightlies.amd.com/packages-multi-arch/deb/20260822-32539019050 stable main' \
-    | sudo tee /etc/apt/sources.list.d/rocm-nightly.list
-sudo apt-get update
+# Download + extract the dcgpu-tests SDK tarball to /opt/rocm-nightly
+python3 build_tools/fetch_rocm_sdk.py \
+    --gpu-family gfx94X-dcgpu-tests --dest /opt/rocm-nightly
 ```
 
-### ROCm computer vision packages
-
-These packages provide headers, cmake configs, and utility sources required
-at build time by the vision libraries. They are part of the ROCm distribution
-and install into `/opt/rocm` alongside the SDK.
-
-```bash
-# rpp — ROCm Performance Primitives (required by MIVisionX)
-sudo apt-get install -y amdrocm-rpp amdrocm-rpp-dev amdrocm-rpp-test
-
-# rocdecode — GPU video decode (required by rocAL and rocPyDecode)
-# amdrocm-decode-test provides share/rocdecode/utils/ utility sources
-# needed at build time
-sudo apt-get install -y amdrocm-decode-dev amdrocm-decode-test
-
-# rocjpeg — GPU JPEG decode (required by rocAL)
-sudo apt-get install -y amdrocm-jpeg-dev amdrocm-jpeg-test
-```
+For an existing `/opt/rocm` install, ensure the rpp, rocDecode (with
+`share/rocdecode/utils`), and rocJPEG dev packages are present — these provide
+the headers, cmake configs, and utility sources the vision libraries need at
+build time.
 
 ### System build tools (Ubuntu 22.04 / 24.04)
 
@@ -319,7 +308,7 @@ The `package.yml` CI workflow produces:
 | | |
 |---|---|
 | OS | Ubuntu 24.04 LTS |
-| ROCm | 10.1.0 (nightly 20260805) |
+| ROCm | 10.2.0 (nightly dcgpu-tests) |
 | GPU | gfx1100 (Radeon RX 7900 series) |
 | CMake | 3.28.3 |
 | Compiler | AMD clang 23.0.0 (`amdclang++`) |
