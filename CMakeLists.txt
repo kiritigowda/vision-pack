@@ -99,6 +99,11 @@ if(VISION_PACK_ENABLE_ROCCV)
       -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
       # rocCV gates its test suite behind its own TESTS option (default OFF).
       -DTESTS=$<IF:$<BOOL:${VISION_PACK_BUILD_TESTS}>,ON,OFF>
+      # rocCV's test executables use std::thread but link no pthread. On
+      # manylinux_2_28 (glibc 2.28) pthread_create/join live in libpthread, so
+      # the link fails; glibc >= 2.34 folds them into libc, which is why
+      # upstream doesn't hit this. Inject -pthread for the test link only.
+      $<$<BOOL:${VISION_PACK_BUILD_TESTS}>:-DCMAKE_EXE_LINKER_FLAGS=-pthread>
       # Forward Python3_ROOT_DIR if set (e.g. to /opt/python-shared/cp312-cp312
       # in manylinux where the static /opt/python build lacks libpython.so)
       $<$<BOOL:${Python3_ROOT_DIR}>:-DPython3_ROOT_DIR=${Python3_ROOT_DIR}>
