@@ -216,7 +216,7 @@ jobs:
           - **amdrocm-rocal** — rocAL augmentation library + Python bindings
           - **amdrocm-roccv** — rocCV GPU image processing + Python bindings
           - **amdrocm-rocpydecode** — Python video/JPEG hardware decode
-          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, libprotobuf, liblmdb, libsndfile)
+          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, liblmdb, libsndfile)
 
           ## Install (DEB)
           \`\`\`bash

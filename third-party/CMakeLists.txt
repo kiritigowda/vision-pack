@@ -105,15 +105,11 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
     endif()
   endforeach()
   vision_pack_provide_package(protobuf Protobuf "third-party/protobuf-build")
-  # Install protobuf shared lib into rocm_sysdeps/ at package install time
-  install(FILES
-      "${CMAKE_BINARY_DIR}/third-party/protobuf-build/libprotobuf.so"
-      "${CMAKE_BINARY_DIR}/third-party/protobuf-build/libprotobuf-lite.so"
-    DESTINATION "${VP_SYSDEPS_LIBDIR}"
-    COMPONENT runtime
-    OPTIONAL
-  )
-  message(STATUS "[vision-pack] protobuf v3.21.12 → ${VP_SYSDEPS_LIBDIR}")
+  # No install() for protobuf: it builds static (libprotobuf.a) and is linked
+  # directly into librocal.so, so there is no shared object to ship in the
+  # sysdeps package. (The old OPTIONAL install of libprotobuf.so was dead — the
+  # .so is never produced — and silently staged nothing.)
+  message(STATUS "[vision-pack] protobuf v3.21.12 (static, linked into librocal)")
 elseif(VISION_PACK_ENABLE_ROCAL)
   find_package(Protobuf REQUIRED)
 endif()
@@ -141,8 +137,10 @@ if(VISION_PACK_BUNDLE_TURBOJPEG)
       "${_tj_stage}/lib/libjpeg.so"
   )
   set(TurboJPEG_ROOT "${_tj_stage}" CACHE PATH "Root of bundled libjpeg-turbo" FORCE)
-  # Install into rocm_sysdeps/ at package install time
-  install(DIRECTORY "${_tj_stage}/lib/"
+  # Install into rocm_sysdeps/ at package install time. Source both lib/ and
+  # lib64/: CMake's GNUInstallDirs picks lib64 on manylinux_2_28 (AlmaLinux 8),
+  # so the .so's land in lib64/, not lib/. Globbing both keeps this robust.
+  install(DIRECTORY "${_tj_stage}/lib/" "${_tj_stage}/lib64/"
     DESTINATION "${VP_SYSDEPS_LIBDIR}"
     COMPONENT runtime
     FILES_MATCHING PATTERN "libturbojpeg.so*" PATTERN "libjpeg.so*"
@@ -213,7 +211,9 @@ if(VISION_PACK_BUNDLE_LIBSNDFILE)
     BUILD_BYPRODUCTS "${_sndfile_stage}/lib/libsndfile.so"
   )
   set(SndFile_ROOT "${_sndfile_stage}" CACHE PATH "Root of bundled libsndfile" FORCE)
-  install(DIRECTORY "${_sndfile_stage}/lib/"
+  # Source both lib/ and lib64/ — GNUInstallDirs installs to lib64/ on
+  # manylinux_2_28 (AlmaLinux 8). See the libjpeg-turbo note above.
+  install(DIRECTORY "${_sndfile_stage}/lib/" "${_sndfile_stage}/lib64/"
     DESTINATION "${VP_SYSDEPS_LIBDIR}"
     COMPONENT runtime
     FILES_MATCHING PATTERN "libsndfile.so*"

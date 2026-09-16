@@ -236,7 +236,6 @@ jobs:
             "build/staging/lib/libroccv.so:rocCV libroccv" \
             "build/staging/bin/runvx:mivisionx runvx tool" \
             "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data" \
-            "${SYSDEPS}/libprotobuf.so*:bundled protobuf" \
             "${SYSDEPS}/libturbojpeg.so*:bundled turbojpeg" \
             "${SYSDEPS}/liblmdb.so*:bundled lmdb" \
             "${SYSDEPS}/libsndfile.so*:bundled libsndfile"; do

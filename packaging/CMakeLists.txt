@@ -3,7 +3,7 @@
 # Install layout mirrors /opt/rocm exactly — same as any other ROCm component:
 #
 #   lib/libopenvx.so, lib/librocal.so, lib/libroccv.so ...
-#   lib/rocm_sysdeps/lib/libturbojpeg.so, liblmdb.so, libsndfile.so, libprotobuf.so
+#   lib/rocm_sysdeps/lib/libturbojpeg.so, liblmdb.so, libsndfile.so
 #   include/mivisionx/, include/rocal/, include/roccv/
 #   lib/cmake/mivisionx/, lib/cmake/roccv/
 #   share/mivisionx/, share/rocal/, share/roccv/
@@ -82,8 +82,9 @@ set(CPACK_COMPONENT_ROCPYDECODE_DISPLAY_NAME    "AMD rocPyDecode")
 set(CPACK_COMPONENT_ROCPYDECODE_DESCRIPTION     "Python bindings for rocDecode/rocJPEG.")
 set(CPACK_COMPONENT_ROCM_SYSDEPS_VISION_DISPLAY_NAME "AMD rocCV bundled runtime deps")
 set(CPACK_COMPONENT_ROCM_SYSDEPS_VISION_DESCRIPTION
-    "Bundled runtime libs (libturbojpeg, libprotobuf, liblmdb, libsndfile) "
-    "installed into lib/rocm_sysdeps/lib/ alongside existing ROCm sysdeps.")
+    "Bundled runtime libs (libturbojpeg, liblmdb, libsndfile) installed into "
+    "lib/rocm_sysdeps/lib/ alongside existing ROCm sysdeps. (protobuf is static "
+    "and linked directly into librocal, so it is not shipped here.)")
 
 # ---------------------------------------------------------------------------
 # Install rules — paths match /opt/rocm exactly
@@ -190,8 +191,6 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/"
     FILES_MATCHING
       PATTERN "libturbojpeg.so*"
       PATTERN "libjpeg.so*"
-      PATTERN "libprotobuf.so*"
-      PATTERN "libprotobuf-lite.so*"
       PATTERN "liblmdb.so*"
       PATTERN "libsndfile.so*"
 )
