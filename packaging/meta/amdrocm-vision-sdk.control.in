@@ -1,0 +1,12 @@
+Section: devel
+Priority: optional
+Standards-Version: 3.9.2
+
+Package: amdrocm-vision-sdk
+Version: @VP_VER@
+Maintainer: ROCm Engineering <rocm-support@amd.com>
+Architecture: amd64
+Depends: amdrocm-vision (>= @VP_VER@), amdrocm-mivisionx-devel (>= @VP_VER@), amdrocm-rocal-devel (>= @VP_VER@), amdrocm-roccv-devel (>= @VP_VER@)
+Description: AMD ROCm Computer Vision SDK (development meta-package)
+ Installs all vision library runtime components plus development headers
+ and cmake configs. Use this to build applications against the vision stack.

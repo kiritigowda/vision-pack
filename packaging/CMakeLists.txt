@@ -3,7 +3,7 @@
 # Install layout mirrors /opt/rocm exactly — same as any other ROCm component:
 #
 #   lib/libopenvx.so, lib/librocal.so, lib/libroccv.so ...
-#   lib/rocm_sysdeps/lib/libturbojpeg.so, liblmdb.so, libsndfile.so
+#   lib/rocm_sysdeps/lib/libturbojpeg.so, libprotobuf.so, liblmdb.so, libsndfile.so
 #   include/mivisionx/, include/rocal/, include/roccv/
 #   lib/cmake/mivisionx/, lib/cmake/roccv/
 #   share/mivisionx/, share/rocal/, share/roccv/
@@ -18,7 +18,7 @@
 #   amdrocm-mivisionx / amdrocm-mivisionx-devel / amdrocm-mivisionx-test
 #   amdrocm-rocal      / amdrocm-rocal-devel      / amdrocm-rocal-test
 #   amdrocm-roccv      / amdrocm-roccv-devel       / amdrocm-roccv-test
-#   amdrocm-rocpydecode                            / amdrocm-rocpydecode-test
+#   amdrocm-pydecode                            / amdrocm-pydecode-test
 
 cmake_minimum_required(VERSION 3.21)
 project(vision-pack-cpack NONE)
@@ -82,9 +82,8 @@ set(CPACK_COMPONENT_ROCPYDECODE_DISPLAY_NAME    "AMD rocPyDecode")
 set(CPACK_COMPONENT_ROCPYDECODE_DESCRIPTION     "Python bindings for rocDecode/rocJPEG.")
 set(CPACK_COMPONENT_ROCM_SYSDEPS_VISION_DISPLAY_NAME "AMD rocCV bundled runtime deps")
 set(CPACK_COMPONENT_ROCM_SYSDEPS_VISION_DESCRIPTION
-    "Bundled runtime libs (libturbojpeg, liblmdb, libsndfile) installed into "
-    "lib/rocm_sysdeps/lib/ alongside existing ROCm sysdeps. (protobuf is static "
-    "and linked directly into librocal, so it is not shipped here.)")
+    "Bundled runtime libs (libturbojpeg, libprotobuf, liblmdb, libsndfile) "
+    "installed into lib/rocm_sysdeps/lib/ alongside existing ROCm sysdeps.")
 
 # ---------------------------------------------------------------------------
 # Install rules — paths match /opt/rocm exactly
@@ -111,6 +110,12 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/include/mivisionx"
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/cmake/mivisionx"
     DESTINATION lib/cmake COMPONENT mivisionx-dev OPTIONAL
 )
+# Transitional find-module shim: upstream ships no MIVisionXConfig.cmake
+# (MIVisionX#1761), so vision-pack provides FindMIVisionX.cmake in lib/cmake so
+# downstream find_package(MIVisionX) works. Remove once upstream exports land.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/shims/FindMIVisionX.cmake"
+    DESTINATION lib/cmake COMPONENT mivisionx-dev
+)
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/mivisionx"
     DESTINATION share COMPONENT mivisionx-dev OPTIONAL
 )
@@ -135,6 +140,11 @@ install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/rocal/LICENSE.txt"
 # --- rocAL dev: include/rocal/ ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/include/rocal"
     DESTINATION include COMPONENT rocal-dev
+)
+# Transitional find-module shim: upstream ships no rocalConfig.cmake (rocAL#514),
+# so vision-pack provides Findrocal.cmake. Remove once upstream exports land.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/shims/Findrocal.cmake"
+    DESTINATION lib/cmake COMPONENT rocal-dev
 )
 # --- rocAL test ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocal/test"
@@ -168,6 +178,11 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/roccv/test"
 )
 
 # --- rocPyDecode: Python extension modules ---
+# rocPyDecode's upstream install rules carry no CMake COMPONENT tags
+# (rocPyDecode#285), so we can't rely on component-filtered installs. Instead we
+# split by PATH here at the packaging layer: runtime .so's → rocpydecode, and
+# share/rocpydecode/tests → rocpydecode-test (below). No submodule patch needed.
+# NOTE: not CI-verified yet — rocpydecode is currently ENABLE_ROCPYDECODE=OFF.
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/"
     DESTINATION lib COMPONENT rocpydecode
     FILES_MATCHING
@@ -191,6 +206,8 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/"
     FILES_MATCHING
       PATTERN "libturbojpeg.so*"
       PATTERN "libjpeg.so*"
+      PATTERN "libprotobuf.so*"
+      PATTERN "libprotobuf-lite.so*"
       PATTERN "liblmdb.so*"
       PATTERN "libsndfile.so*"
 )
@@ -214,8 +231,8 @@ set(CPACK_DEBIAN_ROCAL-TEST_PACKAGE_NAME           "amdrocm-rocal-test")
 set(CPACK_DEBIAN_ROCCV_PACKAGE_NAME                "amdrocm-roccv")
 set(CPACK_DEBIAN_ROCCV-DEV_PACKAGE_NAME            "amdrocm-roccv-devel")
 set(CPACK_DEBIAN_ROCCV-TEST_PACKAGE_NAME           "amdrocm-roccv-test")
-set(CPACK_DEBIAN_ROCPYDECODE_PACKAGE_NAME          "amdrocm-rocpydecode")
-set(CPACK_DEBIAN_ROCPYDECODE-TEST_PACKAGE_NAME     "amdrocm-rocpydecode-test")
+set(CPACK_DEBIAN_ROCPYDECODE_PACKAGE_NAME          "amdrocm-pydecode")
+set(CPACK_DEBIAN_ROCPYDECODE-TEST_PACKAGE_NAME     "amdrocm-pydecode-test")
 set(CPACK_DEBIAN_ROCM-SYSDEPS-VISION_PACKAGE_NAME  "amdrocm-vision-sysdeps")
 
 # Runtime deps — only the ROCm components; bundled C libs ship in sysdeps package
@@ -246,8 +263,8 @@ set(CPACK_RPM_ROCAL-TEST_PACKAGE_NAME           "amdrocm-rocal-test")
 set(CPACK_RPM_ROCCV_PACKAGE_NAME                "amdrocm-roccv")
 set(CPACK_RPM_ROCCV-DEV_PACKAGE_NAME            "amdrocm-roccv-devel")
 set(CPACK_RPM_ROCCV-TEST_PACKAGE_NAME           "amdrocm-roccv-test")
-set(CPACK_RPM_ROCPYDECODE_PACKAGE_NAME          "amdrocm-rocpydecode")
-set(CPACK_RPM_ROCPYDECODE-TEST_PACKAGE_NAME     "amdrocm-rocpydecode-test")
+set(CPACK_RPM_ROCPYDECODE_PACKAGE_NAME          "amdrocm-pydecode")
+set(CPACK_RPM_ROCPYDECODE-TEST_PACKAGE_NAME     "amdrocm-pydecode-test")
 set(CPACK_RPM_ROCM-SYSDEPS-VISION_PACKAGE_NAME  "amdrocm-vision-sysdeps")
 
 # ---------------------------------------------------------------------------
@@ -263,14 +280,24 @@ include(CPack)
 # ---------------------------------------------------------------------------
 find_program(EQUIVS_BUILD equivs-build)
 if(EQUIVS_BUILD)
-  configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/meta/amdrocm-vision.control.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/meta/amdrocm-vision.control"
-    @ONLY
-  )
+  # equivs-build produces one .deb from the first Package: stanza of a control
+  # file, so each meta-package needs its own control file — a single multi-stanza
+  # file would only ever build amdrocm-vision.
+  set(_vision_meta_controls
+      amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests)
+  set(_meta_build_cmds "")
+  foreach(_meta ${_vision_meta_controls})
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/meta/${_meta}.control.in"
+      "${CMAKE_CURRENT_BINARY_DIR}/meta/${_meta}.control"
+      @ONLY
+    )
+    list(APPEND _meta_build_cmds
+      COMMAND ${EQUIVS_BUILD} "${CMAKE_CURRENT_BINARY_DIR}/meta/${_meta}.control")
+  endforeach()
   add_custom_target(package-meta-vision
-    COMMAND ${EQUIVS_BUILD} "${CMAKE_CURRENT_BINARY_DIR}/meta/amdrocm-vision.control"
+    ${_meta_build_cmds}
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/meta"
-    COMMENT "Building amdrocm-vision meta-packages"
+    COMMENT "Building amdrocm-vision, -sdk, -tests meta-packages"
   )
 endif()

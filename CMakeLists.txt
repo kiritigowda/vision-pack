@@ -165,11 +165,14 @@ if(VISION_PACK_ENABLE_ROCAL)
     # PROTOBUF_LIBRARIES/INCLUDE_DIRS that rocAL's dep check and codegen need.
     set(_pb_src "${CMAKE_CURRENT_SOURCE_DIR}/third-party/protobuf/src")
     set(_pb_build "${CMAKE_BINARY_DIR}/third-party/protobuf-build")
+    # Point at the SHARED protobuf (built with protobuf_BUILD_SHARED_LIBS=ON in
+    # third-party/) so librocal.so gets libprotobuf.so as a real DT_NEEDED and
+    # uses the copy shipped in rocm_sysdeps/, not a private static archive (#10).
     list(APPEND _rocal_cmake_args
       "-DProtobuf_INCLUDE_DIR=${_pb_src}"
-      "-DProtobuf_LIBRARY_RELEASE=${_pb_build}/libprotobuf.a"
-      "-DProtobuf_LITE_LIBRARY_RELEASE=${_pb_build}/libprotobuf-lite.a"
-      "-DProtobuf_PROTOC_LIBRARY_RELEASE=${_pb_build}/libprotoc.a"
+      "-DProtobuf_LIBRARY_RELEASE=${_pb_build}/libprotobuf.so"
+      "-DProtobuf_LITE_LIBRARY_RELEASE=${_pb_build}/libprotobuf-lite.so"
+      "-DProtobuf_PROTOC_LIBRARY_RELEASE=${_pb_build}/libprotoc.so"
       "-DProtobuf_PROTOC_EXECUTABLE=${_pb_build}/protoc"
     )
   endif()

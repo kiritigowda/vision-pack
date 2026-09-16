@@ -141,6 +141,11 @@ jobs:
         run: |
           cmake --build . --target package-meta-vision 2>/dev/null \
             || echo "Meta packages skipped (equivs-build not available)"
+          # equivs-build writes each meta .deb into its WORKING_DIRECTORY
+          # (pkg-build/meta). Collect them next to the component .debs so the
+          # repo/upload steps pick up amdrocm-vision, -sdk and -tests too.
+          cp meta/*.deb . 2>/dev/null || echo "(no meta .debs produced)"
+          echo "Meta packages:"; ls -1 *.deb | grep -E 'amdrocm-vision(-sdk|-tests)?_' || true
 
       - name: Build APT repo metadata
         run: |
@@ -215,15 +220,15 @@ jobs:
           - **amdrocm-mivisionx** — MIVisionX OpenVX engine + RPP extension
           - **amdrocm-rocal** — rocAL augmentation library + Python bindings
           - **amdrocm-roccv** — rocCV GPU image processing + Python bindings
-          - **amdrocm-rocpydecode** — Python video/JPEG hardware decode
-          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, liblmdb, libsndfile)
+          - **amdrocm-pydecode** — Python video/JPEG hardware decode
+          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, libprotobuf, liblmdb, libsndfile)
 
           ## Install (DEB)
           \`\`\`bash
           dpkg -i amdrocm-mivisionx_${VER}_amd64.deb
           dpkg -i amdrocm-rocal_${VER}_amd64.deb
           dpkg -i amdrocm-roccv_${VER}_amd64.deb
-          dpkg -i amdrocm-rocpydecode_${VER}_amd64.deb
+          dpkg -i amdrocm-pydecode_${VER}_amd64.deb
           dpkg -i amdrocm-vision-sysdeps_${VER}_amd64.deb
           \`\`\`
 

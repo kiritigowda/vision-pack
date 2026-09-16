@@ -6,24 +6,7 @@ Package: amdrocm-vision
 Version: @VP_VER@
 Maintainer: ROCm Engineering <rocm-support@amd.com>
 Architecture: amd64
-Depends: amdrocm-mivisionx (>= @VP_VER@), amdrocm-rocal (>= @VP_VER@), amdrocm-roccv (>= @VP_VER@), amdrocm-rocpydecode (>= @VP_VER@)
+Depends: amdrocm-mivisionx (>= @VP_VER@), amdrocm-rocal (>= @VP_VER@), amdrocm-roccv (>= @VP_VER@), amdrocm-pydecode (>= @VP_VER@)
 Description: AMD ROCm Computer Vision extension pack (runtime meta-package)
  Installs MIVisionX, rocAL, rocCV, and rocPyDecode runtime libraries.
  This is a convenience meta-package — it carries no files of its own.
-
-Package: amdrocm-vision-sdk
-Version: @VP_VER@
-Maintainer: ROCm Engineering <rocm-support@amd.com>
-Architecture: amd64
-Depends: amdrocm-vision (>= @VP_VER@), amdrocm-mivisionx-devel (>= @VP_VER@), amdrocm-rocal-devel (>= @VP_VER@), amdrocm-roccv-devel (>= @VP_VER@)
-Description: AMD ROCm Computer Vision SDK (development meta-package)
- Installs all vision library runtime components plus development headers
- and cmake configs. Use this to build applications against the vision stack.
-
-Package: amdrocm-vision-tests
-Version: @VP_VER@
-Maintainer: ROCm Engineering <rocm-support@amd.com>
-Architecture: amd64
-Depends: amdrocm-vision-sdk (>= @VP_VER@), amdrocm-mivisionx-test (>= @VP_VER@), amdrocm-rocal-test (>= @VP_VER@), amdrocm-roccv-test (>= @VP_VER@), amdrocm-rocpydecode-test (>= @VP_VER@)
-Description: AMD ROCm Computer Vision test suite meta-package
- Installs all vision library test suites and the SDK they depend on.

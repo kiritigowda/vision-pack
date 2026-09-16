@@ -95,6 +95,11 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
   set(protobuf_BUILD_EXAMPLES      OFF CACHE BOOL "" FORCE)
   set(protobuf_WITH_ZLIB           OFF CACHE BOOL "" FORCE)
   set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+  # Build protobuf as a shared library so rocAL links libprotobuf.so and the
+  # bundled .so we ship in rocm_sysdeps/ is the one actually used at runtime
+  # (matches TheRock's sysdep model; lets protobuf be updated without relinking
+  # rocAL). See issue #10.
+  set(protobuf_BUILD_SHARED_LIBS   ON  CACHE BOOL "" FORCE)
   add_subdirectory(protobuf/cmake protobuf-build)
   # gcc-13 promotes -Wstringop-overread to an error in manylinux_2_28 toolset.
   # False positive in protobuf v3.21.x template copy constructors.
@@ -105,11 +110,18 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
     endif()
   endforeach()
   vision_pack_provide_package(protobuf Protobuf "third-party/protobuf-build")
-  # No install() for protobuf: it builds static (libprotobuf.a) and is linked
-  # directly into librocal.so, so there is no shared object to ship in the
-  # sysdeps package. (The old OPTIONAL install of libprotobuf.so was dead — the
-  # .so is never produced — and silently staged nothing.)
-  message(STATUS "[vision-pack] protobuf v3.21.12 (static, linked into librocal)")
+  # Install the shared protobuf libs into rocm_sysdeps/. protobuf writes its
+  # .so's (with versioned SONAME symlinks) directly into protobuf-build/, not a
+  # GNUInstallDirs prefix, so the lib64 gotcha doesn't apply here. Glob the
+  # build dir to catch libprotobuf.so + libprotobuf.so.3.21.12 + symlinks.
+  install(DIRECTORY "${CMAKE_BINARY_DIR}/third-party/protobuf-build/"
+    DESTINATION "${VP_SYSDEPS_LIBDIR}"
+    COMPONENT runtime
+    FILES_MATCHING
+      PATTERN "libprotobuf.so*"
+      PATTERN "libprotobuf-lite.so*"
+  )
+  message(STATUS "[vision-pack] protobuf v3.21.12 (shared) → ${VP_SYSDEPS_LIBDIR}")
 elseif(VISION_PACK_ENABLE_ROCAL)
   find_package(Protobuf REQUIRED)
 endif()
