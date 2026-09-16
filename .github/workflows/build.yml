@@ -215,30 +215,42 @@ jobs:
             cmake --install "build/_subprojects/${proj}/build" \
               --prefix build/staging
           done
-          # Install bundled sysdeps (turbojpeg, protobuf, lmdb, libsndfile)
-          cmake --install build --prefix build/staging \
-            --component rocm-sysdeps-vision 2>/dev/null || true
+          # Install the bundled third-party runtime deps (protobuf, turbojpeg,
+          # lmdb, libsndfile) → lib/rocm_sysdeps/lib/. These live in the
+          # top-level build tree under the "runtime" component (see
+          # third-party/CMakeLists.txt); the packaging job then repackages this
+          # dir as the amdrocm-vision-sysdeps package, same as TheRock ships its
+          # rocm_sysdeps. NOT --component rocm-sysdeps-vision: that name only
+          # exists in the packaging project, so it silently matched nothing.
+          cmake --install build --prefix build/staging --component runtime
 
       # Fail fast if the staged install is missing anything the packaging or
       # test stages rely on — libs, the runvx tool, and rocAL's test dataset.
       - name: Verify install
         run: |
           FAIL=0
+          SYSDEPS="build/staging/lib/rocm_sysdeps/lib"
           for CHECK in \
             "build/staging/lib/libopenvx.so:mivisionx libopenvx" \
             "build/staging/lib/librocal.so:rocAL librocal" \
             "build/staging/lib/libroccv.so:rocCV libroccv" \
             "build/staging/bin/runvx:mivisionx runvx tool" \
-            "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data"; do
+            "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data" \
+            "${SYSDEPS}/libprotobuf.so*:bundled protobuf" \
+            "${SYSDEPS}/libturbojpeg.so*:bundled turbojpeg" \
+            "${SYSDEPS}/liblmdb.so*:bundled lmdb" \
+            "${SYSDEPS}/libsndfile.so*:bundled libsndfile"; do
             PATH_CHECK="${CHECK%%:*}"
             LABEL="${CHECK##*:}"
-            if ls "${PATH_CHECK}" >/dev/null 2>&1; then
+            if ls ${PATH_CHECK} >/dev/null 2>&1; then
               echo "  ${LABEL}: OK"
             else
               echo "  ERROR: ${LABEL} missing (${PATH_CHECK})"
               FAIL=1
             fi
           done
+          echo "=== Staged bundled runtime deps ==="
+          ls -la "${SYSDEPS}" 2>/dev/null || echo "(rocm_sysdeps/lib missing)"
           [ "${FAIL}" -eq 0 ] || { echo "Staged install verification failed"; exit 1; }
 
       - name: Collect build metadata
