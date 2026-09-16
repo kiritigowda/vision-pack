@@ -59,9 +59,6 @@ on:
       artifact_name:
         description: 'Name of the uploaded staged artifact'
         value: ${{ jobs.build.outputs.artifact_name }}
-      buildtree_artifact:
-        description: 'Name of the uploaded build-tree artifact (for the test stage)'
-        value: ${{ jobs.build.outputs.buildtree_artifact }}
       version:
         description: 'Package version string'
         value: ${{ jobs.build.outputs.version }}
@@ -110,7 +107,6 @@ jobs:
 
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
-      buildtree_artifact: ${{ steps.meta.outputs.buildtree_artifact }}
       version: ${{ steps.meta.outputs.version }}
 
     steps:
@@ -202,7 +198,6 @@ jobs:
             -DVISION_PACK_ENABLE_ROCAL=ON \
             -DVISION_PACK_ENABLE_ROCCV=ON \
             -DVISION_PACK_ENABLE_ROCPYDECODE=OFF \
-            -DVISION_PACK_BUILD_TESTS=ON \
             -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}" \
             ${PYTHON_ARGS}
           # Log which Python was selected so sub-build failures are diagnosable
@@ -254,27 +249,13 @@ jobs:
           SHA="${{ github.sha }}"
           SHORT="${SHA:0:8}"
           ARTIFACT="vision-pack-staged-multiarch-${SHORT}"
-          BUILDTREE="vision-pack-buildtree-${SHORT}"
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
-          echo "buildtree_artifact=${BUILDTREE}" >> "$GITHUB_OUTPUT"
           printf '{"version":"%s","sha":"%s","rocm_path":"%s","build_type":"%s","release_type":"%s"}\n' \
             "${VER}" "${SHA}" "${ROCM_PATH}" "${CMAKE_BUILD_TYPE}" \
             "${{ inputs.release_type || 'ci' }}" \
             > build/staging/vision-pack-manifest.json
-          echo "Version: ${VER}  Artifact: ${ARTIFACT}  BuildTree: ${BUILDTREE}"
-
-      # Tar the per-library build trees the test stage runs from. ctest executes
-      # from build/_subprojects/<lib>/build (test binaries + CTestTestfile.cmake),
-      # not the staging install tree. tar preserves exec bits + symlinks that
-      # upload-artifact@v4's zip would otherwise drop, keeping binaries runnable.
-      - name: Package build tree for tests
-        run: |
-          tar -czf build-tree.tgz \
-            build/_subprojects/mivisionx/build \
-            build/_subprojects/rocCV/build \
-            build/_subprojects/rocal/build
-          echo "build-tree.tgz size: $(du -h build-tree.tgz | cut -f1)"
+          echo "Version: ${VER}  Artifact: ${ARTIFACT}"
 
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v4
@@ -284,20 +265,14 @@ jobs:
           # Nightly artifacts kept longer than CI artifacts
           retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
 
-      - name: Upload build-tree artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.meta.outputs.buildtree_artifact }}
-          path: build-tree.tgz
-          retention-days: 7
-
   # ---------------------------------------------------------------------------
-  # Test stage — one matrix leg per library, running in parallel. Each leg pulls
-  # the staged install + build-tree artifacts, re-fetches the SDK for runtime
-  # libs (and, for rocAL, the toolchain its --build-and-test tests recompile
-  # with), then runs that library's CPU-runnable ctests. The runner has no GPU,
-  # so legs are non-blocking (continue-on-error) — GPU-variant tests error but
-  # do not fail the pipeline. rocPyDecode is disabled for now.
+  # Test stage — one matrix leg per library, running in parallel. Mirrors a
+  # target device: each leg installs the staged runtime + test-source tree into
+  # ROCM_PATH, then configures, compiles, and runs that library's installed test
+  # suite (share/<lib>/test) against the installed libs — the aggregator never
+  # builds tests itself. Re-fetches the SDK for the toolchain + runtime libs.
+  # CPU-only and non-blocking (continue-on-error): the runner has no GPU, so
+  # GPU-variant tests error but do not fail the pipeline. rocPyDecode disabled.
   # ---------------------------------------------------------------------------
   test:
     needs: build
@@ -346,61 +321,74 @@ jobs:
           fi
           python3 build_tools/fetch_rocm_sdk.py ${ARGS}
 
+      # Install the staged tree into ROCM_PATH — this is what the runtime +
+      # -test packages deliver on a target device: the libraries under lib/ and
+      # the test sources + data under share/<lib>/test/. The test sources are
+      # standalone CMake projects that find_package() the installed libs.
       - name: Download staged install
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build.outputs.artifact_name }}
-          path: build/staging
+          path: staging
 
-      - name: Download build tree
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build.outputs.buildtree_artifact }}
-          path: .
-
-      - name: Restore build tree
+      - name: Install staged tree into ROCM_PATH
         run: |
-          tar -xzf build-tree.tgz
-          ls -d build/_subprojects/*/build
+          cp -r staging/. "${ROCM_PATH}/"
+          echo "Installed test sources:"
+          ls -d "${ROCM_PATH}"/share/${{ matrix.lib == 'rocCV' && 'roccv' || matrix.lib }}/test 2>/dev/null || true
 
-      # rocAL ctests read a hardcoded ${ROCM_PATH}/share/rocal/test/data/ path
-      # baked into CTestTestfile.cmake at configure time. Land the staged data
-      # under the SDK prefix so those paths resolve.
-      - name: Stage rocAL test data into ROCM_PATH
-        if: matrix.lib == 'rocal'
-        run: |
-          mkdir -p "${ROCM_PATH}/share"
-          cp -r build/staging/share/rocal "${ROCM_PATH}/share/"
-          ls "${ROCM_PATH}/share/rocal/test/data/images/AMD-tinyDataSet" >/dev/null \
-            && echo "rocAL test data staged" \
-            || { echo "ERROR: rocAL test data not staged"; exit 1; }
-
-      - name: CTest — ${{ matrix.lib }}
-        working-directory: build/_subprojects/${{ matrix.lib }}/build
+      # Build + run each library's installed test suite on this runner, exactly
+      # as a target device would from the -test package. Tests are compiled here
+      # (not in the build stage) against the installed libs. CPU-only and
+      # non-blocking — the runner has no GPU, so GPU-variant tests error but do
+      # not fail the pipeline.
+      - name: Build & run tests — ${{ matrix.lib }}
         continue-on-error: true
         env:
-          PATH: ${{ github.workspace }}/build/staging/bin:${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
+          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
           LD_LIBRARY_PATH: >-
-            ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib
+            ${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib:${{ env.ROCM_PATH }}/lib/rocm_sysdeps/lib
           AGO_DEFAULT_TARGET: CPU
+          HIP_PLATFORM: amd
         run: |
           case "${{ matrix.lib }}" in
             mivisionx)
-              FILTER='-R openvx_gdf_tests_CPU|openvx_vision_coverage' ;;
+              TEST_SRC="${ROCM_PATH}/share/mivisionx/test"
+              FILTER='-R openvx_gdf_tests_CPU|openvx_vision_coverage'
+              EXTRA_CMAKE='' ;;
             rocal)
-              # CPU-runnable tests only (basic_test_cpu, unit_tests_cpu, ...).
-              FILTER='-R _cpu$' ;;
+              TEST_SRC="${ROCM_PATH}/share/rocal/test"
+              FILTER='-R _cpu$'
+              EXTRA_CMAKE='' ;;
             rocCV)
-              FILTER='' ;;
+              TEST_SRC="${ROCM_PATH}/share/roccv/test/cpp"
+              FILTER=''
+              # rocCV test exes use std::thread but link no pthread. On
+              # manylinux_2_28 (glibc 2.28) pthread_create/join live in
+              # libpthread; glibc >= 2.34 folds them into libc. Add -pthread.
+              EXTRA_CMAKE='-DCMAKE_EXE_LINKER_FLAGS=-pthread' ;;
           esac
 
+          echo "=== Configuring installed test sources at ${TEST_SRC} ==="
+          cmake -B test-build -S "${TEST_SRC}" \
+            -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DROCM_PATH="${ROCM_PATH}" \
+            -DBACKEND=HIP \
+            "-DCMAKE_PREFIX_PATH=${ROCM_PATH};${ROCM_PATH}/lib/cmake;${ROCM_PATH}/lib/llvm" \
+            ${EXTRA_CMAKE}
+
+          echo "=== Building tests ==="
+          cmake --build test-build --parallel 4
+
+          echo "=== Running ctest ==="
+          cd test-build
           COUNT=$(ctest -N 2>&1 | awk '/Total Tests/{print $NF}')
           echo "Registered tests: ${COUNT:-0}"
           if [ "${COUNT:-0}" -eq 0 ]; then
             echo "${{ matrix.lib }}: 0 tests registered — nothing to run"
             exit 0
           fi
-
           ctest --output-on-failure --parallel 4 \
             ${FILTER} \
             --test-output-size-passed 1024 \
@@ -412,5 +400,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ctest-results-${{ matrix.lib }}-${{ github.sha }}
-          path: build/_subprojects/${{ matrix.lib }}/build/Testing/
+          path: test-build/Testing/
+          retention-days: 7
           retention-days: 7
