@@ -402,4 +402,3 @@ jobs:
           name: ctest-results-${{ matrix.lib }}-${{ github.sha }}
           path: test-build/Testing/
           retention-days: 7
-          retention-days: 7
