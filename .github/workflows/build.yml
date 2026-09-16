@@ -278,6 +278,22 @@ jobs:
           retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
 
   # ---------------------------------------------------------------------------
+  # Package stage — turn the staged tree into DEB + RPM + a multiarch tarball
+  # (vision-pack-dist-linux-multiarch-<ver>.tar.gz), same as TheRock's dist
+  # tarball. Runs on every build so CI artifacts include installable packages,
+  # not just the raw staging tree. Uploaded as vision-pack-{deb,rpm,tarball}-*.
+  # ---------------------------------------------------------------------------
+  package:
+    needs: build
+    uses: ./.github/workflows/package.yml
+    with:
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      package_version: ${{ needs.build.outputs.version }}
+      release_type: ${{ inputs.release_type || 'ci' }}
+      sha: ${{ inputs.ref || github.sha }}
+    secrets: inherit
+
+  # ---------------------------------------------------------------------------
   # Test stage — one matrix leg per library, running in parallel. Mirrors a
   # target device: each leg installs the staged runtime + test-source tree into
   # ROCM_PATH, then configures, compiles, and runs that library's installed test

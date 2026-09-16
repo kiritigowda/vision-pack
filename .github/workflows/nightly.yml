@@ -1,12 +1,12 @@
 # vision-pack nightly workflow
 #
 # Runs nightly at 02:00 UTC. Bumps all four vision library submodules to
-# their latest develop HEAD, calls the reusable build workflow, then calls
-# the package workflow to produce DEB/RPM/TGZ and publish a GitHub prerelease.
+# their latest develop HEAD, then calls the reusable build workflow. build.yml
+# runs the full build → package → test pipeline; with release_type: nightly its
+# package job produces DEB/RPM/TGZ and publishes a GitHub prerelease.
 #
 # Follows TheRock's pattern: one build workflow used for both PR CI and
-# nightly, with the nightly orchestrator handling submodule bumps and
-# downstream packaging.
+# nightly, with the nightly orchestrator handling only the submodule bumps.
 
 name: nightly
 
@@ -76,7 +76,10 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
-  # 2. Build (reusable workflow) — single pass, all GPU families
+  # 2. Build + package (reusable workflow) — single pass, all GPU families.
+  # build.yml runs its own build → package → test pipeline; with
+  # release_type: nightly its package job cuts the DEB/RPM/tarball and the
+  # GitHub prerelease. No separate package job here — build.yml owns packaging.
   # ---------------------------------------------------------------------------
   build:
     needs: bump-submodules
@@ -87,16 +90,4 @@ jobs:
       rocm_sdk_family: ${{ inputs.rocm_sdk_family || '' }}
       rocm_sdk_url: ${{ inputs.rocm_sdk_url || '' }}
       release_type: nightly
-
-  # ---------------------------------------------------------------------------
-  # 3. Package — DEB + RPM + TGZ + GitHub prerelease
-  # ---------------------------------------------------------------------------
-  package:
-    needs: [bump-submodules, build]
-    uses: ./.github/workflows/package.yml
-    with:
-      artifact_name: ${{ needs.build.outputs.artifact_name }}
-      package_version: ${{ needs.build.outputs.version }}
-      release_type: nightly
-      sha: ${{ needs.bump-submodules.outputs.sha }}
     secrets: inherit
