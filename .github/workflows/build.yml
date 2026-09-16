@@ -36,7 +36,17 @@ on:
         required: false
         default: ''
       rocm_sdk_date:
-        description: 'Quartz nightly date YYYYMMDD (empty = latest)'
+        description: 'Nightly date YYYYMMDD (empty = latest); ignored if rocm_sdk_url set'
+        type: string
+        required: false
+        default: ''
+      rocm_sdk_family:
+        description: 'SDK GPU family/variant to auto-select from the index'
+        type: string
+        required: false
+        default: ''
+      rocm_sdk_url:
+        description: 'Full SDK tarball URL to pin (e.g. run-id multi-arch); overrides family/date'
         type: string
         required: false
         default: ''
@@ -55,7 +65,15 @@ on:
   workflow_dispatch:
     inputs:
       rocm_sdk_date:
-        description: 'Quartz nightly date YYYYMMDD (empty = latest)'
+        description: 'Nightly date YYYYMMDD (empty = latest); ignored if rocm_sdk_url set'
+        required: false
+        default: ''
+      rocm_sdk_family:
+        description: 'SDK GPU family/variant to auto-select from the index'
+        required: false
+        default: ''
+      rocm_sdk_url:
+        description: 'Full SDK tarball URL to pin (e.g. run-id multi-arch); overrides family/date'
         required: false
         default: ''
       release_type:
@@ -67,6 +85,10 @@ env:
   ROCM_PATH: /opt/rocm-nightly
   CMAKE_BUILD_TYPE: Release
   VP_BUILD_PARALLEL: 24
+  # Default SDK family when neither rocm_sdk_url nor rocm_sdk_family is given.
+  # Any family works (vision libs have no GPU kernel code); this variant
+  # bundles rpp/rocdecode/rocjpeg + share/rocdecode/utils.
+  ROCM_SDK_FAMILY_DEFAULT: gfx94X-dcgpu-tests
 
 jobs:
   build:
@@ -96,12 +118,11 @@ jobs:
 
       # TheRock's manylinux image has gcc-toolset-13, cmake 3.27, ninja,
       # Python 3.12 interpreter. We additionally need:
-      #   dpkg       — for dpkg-deb --extract of nightly deb packages
       #   python3-devel — Python.h headers for rocCV/rocAL pybind11 builds
       #     (manylinux /opt/python builds lack dev headers in the system path)
       - name: Install extra build tools
         run: |
-          yum install -y dpkg python3-devel make curl 2>/dev/null || true
+          yum install -y python3-devel make curl 2>/dev/null || true
 
           echo "=== Build environment ==="
           cmake --version
@@ -113,182 +134,48 @@ jobs:
           # Put manylinux Python 3.12 on PATH (interpreter + pip)
           echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
 
-      # Download the Quartz nightly ROCm SDK tarball.
-      # Vision libs have no GPU kernel code so gfx110X (gfx11 family)
-      # provides a full SDK for building — headers, cmake, libs, compiler.
-      - name: Fetch Quartz nightly ROCm SDK
+      # Download the nightly ROCm SDK tarball.
+      # The dcgpu-tests variant bundles the full SDK (HIP, compiler,
+      # rocm_sysdeps) *plus* rpp, rocDecode, rocJPEG headers/cmake and the
+      # rocDecode build utils (share/rocdecode/utils) under one prefix — so
+      # no separate deb overlay is needed. Vision libs have no GPU kernel
+      # code, so a single-family SDK builds all supported GPU families.
+      - name: Fetch nightly ROCm SDK
         env:
           SDK_DATE: ${{ inputs.rocm_sdk_date }}
+          SDK_FAMILY: ${{ inputs.rocm_sdk_family }}
+          SDK_URL: ${{ inputs.rocm_sdk_url }}
         run: |
-          ARGS="--gpu-family gfx110X --dest ${ROCM_PATH}"
-          if [ -n "${SDK_DATE}" ]; then
-            ARGS="${ARGS} --date ${SDK_DATE}"
+          ARGS="--dest ${ROCM_PATH}"
+          if [ -n "${SDK_URL}" ]; then
+            # Pin an exact tarball (e.g. run-id multi-arch S3 artifact).
+            ARGS="${ARGS} --url ${SDK_URL}"
+          else
+            FAMILY="${SDK_FAMILY:-${ROCM_SDK_FAMILY_DEFAULT}}"
+            ARGS="${ARGS} --gpu-family ${FAMILY}"
+            [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
           fi
           python3 build_tools/fetch_rocm_sdk.py ${ARGS}
           echo "SDK cmake packages available:"
-          ls "${ROCM_PATH}/lib/cmake/" | head -20
+          ls "${ROCM_PATH}/lib/cmake/" | head -30
 
-      # Install RPP, rocdecode, rocJPEG dev+test packages from the nightly deb repo.
-      #
-      # These packages install files to ./opt/rocm/core-10.1/ inside the .deb,
-      # so we extract to / (filesystem root) and they land at /opt/rocm/core-10.1/.
-      # The unversioned packages (amdrocm-rpp, amdrocm-decode-test, etc.) are
-      # empty stubs — the versioned 10.1 variants contain the actual files.
-      #
-      # After extraction we update ROCM_PATH to point at the core-10.1 overlay
-      # where rpp/rocdecode/rocjpeg headers and cmake configs reside.
-      - name: Install ROCm CV packages from nightly deb
-        run: |
-          DEB_BASE="https://rocm.nightlies.amd.com/packages-multi-arch/deb"
-
-          # amdrocm-decode-test10.1 dropped utils/rocvideodecode/roc_video_dec.cpp
-          # after build 20260805 (regression: ROCm/rocm-systems#11609).
-          # We cannot distinguish good from bad builds from the Packages.gz index
-          # (same installed-size; no Contents index available). Instead, download
-          # each candidate deb and check for roc_video_dec.cpp directly.
-          # To avoid downloading all 82MB debs, check newest builds first —
-          # if AMD fixes the regression, the loop exits on the first build.
-          PINNED_GOOD="20260805-30962830816"   # last known-good build
-          BUILDS=$(curl -sL "${DEB_BASE}/" \
-            | grep -o '[0-9]\{8\}-[0-9]*' | sort -r | head -15)
-          # Prepend pinned-good at the end as guaranteed fallback
-          BUILDS="${BUILDS} ${PINNED_GOOD}"
-          LATEST=""
-          for BUILD in ${BUILDS}; do
-            PKG_GZ="${DEB_BASE}/${BUILD}/dists/stable/main/binary-amd64/Packages.gz"
-            FNAME=$(curl -sL "${PKG_GZ}" 2>/dev/null | zcat 2>/dev/null \
-              | awk '/^Package: amdrocm-decode-test10\.1$/{f=1} f && /^Filename:/{print $2; exit}')
-            if [ -z "${FNAME}" ]; then
-              echo "  Build ${BUILD}: package not found, skipping"
-              continue
-            fi
-            echo "  Checking build ${BUILD} for roc_video_dec.cpp..."
-            DEB_TMP=$(mktemp --suffix=.deb)
-            curl -fsSL "${DEB_BASE}/${BUILD}/${FNAME}" -o "${DEB_TMP}" 2>/dev/null
-            if dpkg-deb --contents "${DEB_TMP}" 2>/dev/null \
-                | grep -qF 'roc_video_dec.cpp'; then
-              LATEST="${BUILD}"
-              rm -f "${DEB_TMP}"
-              echo "  Found roc_video_dec.cpp in build ${BUILD}"
-              break
-            fi
-            rm -f "${DEB_TMP}"
-            echo "  Build ${BUILD}: roc_video_dec.cpp missing, trying older build"
-          done
-          if [ -z "${LATEST}" ]; then
-            echo "ERROR: no deb build found with roc_video_dec.cpp"
-            echo "Upstream issue: https://github.com/ROCm/rocm-systems/issues/11609"
-            exit 1
-          fi
-          echo "Using nightly deb build: ${LATEST}"
-          PKG_TMP=$(mktemp)
-          curl -sL "${DEB_BASE}/${LATEST}/dists/stable/main/binary-amd64/Packages.gz" \
-            | zcat > "${PKG_TMP}"
-
-          # Use versioned 10.1 packages — unversioned ones are empty stubs.
-          # For most packages: extract directly to / (fast, small packages).
-          # For amdrocm-decode-test10.1 (82MB, contains large video files):
-          # extract to a temp dir and selectively copy only the needed utils/
-          # and share/ subdirs — skip the video/ directory to avoid container
-          # overlay filesystem issues with large files.
-          for PKG in \
-            amdrocm-rpp10.1 amdrocm-rpp-dev10.1 amdrocm-rpp-test10.1 \
-            amdrocm-decode-dev10.1 \
-            amdrocm-jpeg-dev10.1 amdrocm-jpeg-test10.1; do
-            FILENAME=$(awk "/^Package: ${PKG}$/{f=1} f && /^Filename:/{print \$2; exit}" \
-              "${PKG_TMP}")
-            if [ -z "${FILENAME}" ]; then
-              echo "  WARNING: ${PKG} not in index — skipping"
-              continue
-            fi
-            DEB=$(mktemp --suffix=.deb)
-            echo "  Downloading ${PKG}..."
-            curl -fsSL "${DEB_BASE}/${LATEST}/${FILENAME}" -o "${DEB}"
-            dpkg-deb --extract "${DEB}" /
-            EXTRACT_RC=$?
-            rm -f "${DEB}"
-            [ "${EXTRACT_RC}" -ne 0 ] && echo "  ERROR: ${PKG} failed" && exit 1
-            echo "  ${PKG} -> OK"
-          done
-
-          # amdrocm-decode-test10.1 contains large video files (>80MB total).
-          # Extract to temp dir and copy only share/ and include/ — skip video/.
-          PKG="amdrocm-decode-test10.1"
-          FILENAME=$(awk "/^Package: ${PKG}$/{f=1} f && /^Filename:/{print \$2; exit}" \
-            "${PKG_TMP}")
-          if [ -z "${FILENAME}" ]; then
-            echo "ERROR: ${PKG} not found in index"
-            exit 1
-          fi
-          DEB=$(mktemp --suffix=.deb)
-          EXTRACT_TMP=$(mktemp -d)
-          echo "  Downloading ${PKG} (large — extracting selectively)..."
-          curl -fsSL "${DEB_BASE}/${LATEST}/${FILENAME}" -o "${DEB}"
-          dpkg-deb --extract "${DEB}" "${EXTRACT_TMP}"
-          rm -f "${DEB}"
-          # Copy everything EXCEPT the video/ directory (large, not needed for build)
-          CORE_SRC="${EXTRACT_TMP}/opt/rocm/core-10.1"
-          CORE_DST="/opt/rocm/core-10.1"
-          if [ -d "${CORE_SRC}" ]; then
-            mkdir -p "${CORE_DST}"
-            # Copy share/rocdecode excluding video/
-            if [ -d "${CORE_SRC}/share/rocdecode" ]; then
-              mkdir -p "${CORE_DST}/share/rocdecode"
-              for SUBDIR in utils samples test cmake; do
-                [ -d "${CORE_SRC}/share/rocdecode/${SUBDIR}" ] && \
-                  cp -r "${CORE_SRC}/share/rocdecode/${SUBDIR}" "${CORE_DST}/share/rocdecode/"
-              done
-            fi
-            # Copy any other dirs (include, lib, etc.) that may be in this pkg
-            for D in include lib; do
-              [ -d "${CORE_SRC}/${D}" ] && cp -r "${CORE_SRC}/${D}" "${CORE_DST}/"
-            done
-          fi
-          rm -rf "${EXTRACT_TMP}"
-          # Verify the key file landed
-          ls "/opt/rocm/core-10.1/share/rocdecode/utils/rocvideodecode/roc_video_dec.cpp" \
-            >/dev/null 2>&1 && echo "  ${PKG} -> OK (roc_video_dec.cpp present)" \
-            || { echo "  ERROR: roc_video_dec.cpp missing after selective extract"; exit 1; }
-
-          rm -f "${PKG_TMP}"
-
-          # The core-10.1 overlay contains rpp, rocdecode, rocjpeg headers/cmake.
-          CORE_PATH="/opt/rocm/core-10.1"
-          echo "ROCM_CORE_PATH=${CORE_PATH}" >> "$GITHUB_ENV"
-
-          # Debug: show what actually landed in core-10.1/share/rocdecode
-          echo "=== /opt/rocm/core-10.1/share/rocdecode ==="
-          find "${CORE_PATH}/share/rocdecode" -maxdepth 2 2>/dev/null \
-            | sort | head -20 || echo "(directory missing)"
-
-          # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils.
-          # Remove any existing dir/symlink first, then create fresh symlink.
-          # ln -sfn is unsafe when target is an existing directory — it nests.
-          ROCM_ROCDECODE="${ROCM_PATH}/share/rocdecode"
-          mkdir -p "${ROCM_PATH}/share"
-          rm -rf "${ROCM_ROCDECODE}"
-          ln -s "${CORE_PATH}/share/rocdecode" "${ROCM_ROCDECODE}"
-          echo "  symlink: ${ROCM_ROCDECODE} -> ${CORE_PATH}/share/rocdecode"
-          echo "  symlink target exists: $([ -d "${ROCM_ROCDECODE}" ] && echo YES || echo NO)"
-
-          # Verify all critical paths
+          # Verify the SDK carries everything we used to pull from deb overlays.
           for CHECK in \
-            "${CORE_PATH}/include/rpp/rpp.h:rpp headers" \
-            "${ROCM_ROCDECODE}/utils/rocvideodecode/roc_video_dec.cpp:roc_video_dec.cpp" \
-            "${CORE_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers"; do
+            "${ROCM_PATH}/include/rpp/rpp.h:rpp headers" \
+            "${ROCM_PATH}/include/rocjpeg/rocjpeg.h:rocjpeg headers" \
+            "${ROCM_PATH}/share/rocdecode/utils/rocvideodecode/roc_video_dec.cpp:rocdecode utils"; do
             PATH_CHECK="${CHECK%%:*}"
             LABEL="${CHECK##*:}"
             ls "${PATH_CHECK}" >/dev/null 2>&1 \
               && echo "  ${LABEL}: OK" \
-              || { echo "  ERROR: ${LABEL} not found"; exit 1; }
+              || { echo "  ERROR: ${LABEL} not found in SDK tarball"; exit 1; }
           done
 
       - name: CMake configure
         run: |
-          # ROCM_PATH      = SDK tarball (/opt/rocm-nightly) — HIP, compiler, hip libs
-          # ROCM_CORE_PATH = deb overlay (/opt/rocm/core-10.1) — rpp, rocdecode, rocjpeg
-          # Pass both to CMAKE_PREFIX_PATH so find_package resolves both locations.
-          CMAKE_PREFIX="${ROCM_PATH};${ROCM_CORE_PATH};${ROCM_CORE_PATH}/lib/llvm"
+          # Single prefix — the dcgpu-tests SDK tarball carries HIP, compiler,
+          # rpp, rocdecode, rocjpeg, and rocdecode/utils all under ROCM_PATH.
+          CMAKE_PREFIX="${ROCM_PATH};${ROCM_PATH}/lib/llvm"
 
           # Use the shared Python install which has libpython3.12.so (Development.Embed).
           # The manylinux /opt/python build is statically linked — no libpython.so.
@@ -310,7 +197,7 @@ jobs:
             -DVISION_PACK_ENABLE_MIVISIONX=ON \
             -DVISION_PACK_ENABLE_ROCAL=ON \
             -DVISION_PACK_ENABLE_ROCCV=ON \
-            -DVISION_PACK_ENABLE_ROCPYDECODE=ON \
+            -DVISION_PACK_ENABLE_ROCPYDECODE=OFF \
             -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}" \
             ${PYTHON_ARGS}
           # Log which Python was selected so sub-build failures are diagnosable
@@ -324,7 +211,7 @@ jobs:
       - name: Install to staging
         run: |
           mkdir -p build/staging
-          for proj in mivisionx rocCV rocpydecode rocal; do
+          for proj in mivisionx rocCV rocal; do
             cmake --install "build/_subprojects/${proj}/build" \
               --prefix build/staging
           done
@@ -332,42 +219,27 @@ jobs:
           cmake --install build --prefix build/staging \
             --component rocm-sysdeps-vision 2>/dev/null || true
 
-      - name: CTest — rocPyDecode
-        working-directory: build/_subprojects/rocpydecode/build
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib
+      # Fail fast if the staged install is missing anything the packaging or
+      # test stages rely on — libs, the runvx tool, and rocAL's test dataset.
+      - name: Verify install
         run: |
-          ctest --output-on-failure --parallel 4 \
-            --test-output-size-passed 1024 \
-            --test-output-size-failed 102400 \
-            -T Test
-
-      - name: CTest — MIVisionX (CPU tests only)
-        working-directory: build/_subprojects/mivisionx/build
-        env:
-          PATH: ${{ github.workspace }}/build/staging/bin:${{ env.ROCM_PATH }}/bin:/usr/local/bin:/usr/bin:/bin
-          LD_LIBRARY_PATH: ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib
-        run: |
-          ctest --output-on-failure --parallel 4 \
-            -R "openvx_gdf_tests_CPU|openvx_vision_coverage" \
-            --test-output-size-passed 1024 \
-            --test-output-size-failed 102400 \
-            -T Test
-        continue-on-error: true
-
-      - name: CTest — rocCV
-        working-directory: build/_subprojects/rocCV/build
-        env:
-          LD_LIBRARY_PATH: >-
-            ${{ github.workspace }}/build/staging/lib:${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib
-        run: |
-          COUNT=$(ctest -N 2>&1 | grep "Total Tests" | awk '{print $NF}')
-          if [ "${COUNT:-0}" -gt 0 ]; then
-            ctest --output-on-failure --parallel 4 -T Test
-          else
-            echo "rocCV: 0 tests registered (built with TESTS=OFF)"
-          fi
-        continue-on-error: true
+          FAIL=0
+          for CHECK in \
+            "build/staging/lib/libopenvx.so:mivisionx libopenvx" \
+            "build/staging/lib/librocal.so:rocAL librocal" \
+            "build/staging/lib/libroccv.so:rocCV libroccv" \
+            "build/staging/bin/runvx:mivisionx runvx tool" \
+            "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data"; do
+            PATH_CHECK="${CHECK%%:*}"
+            LABEL="${CHECK##*:}"
+            if ls "${PATH_CHECK}" >/dev/null 2>&1; then
+              echo "  ${LABEL}: OK"
+            else
+              echo "  ERROR: ${LABEL} missing (${PATH_CHECK})"
+              FAIL=1
+            fi
+          done
+          [ "${FAIL}" -eq 0 ] || { echo "Staged install verification failed"; exit 1; }
 
       - name: Collect build metadata
         id: meta
@@ -385,14 +257,6 @@ jobs:
             > build/staging/vision-pack-manifest.json
           echo "Version: ${VER}  Artifact: ${ARTIFACT}"
 
-      - name: Upload CTest results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ctest-results-${{ github.sha && fromJSON(format('["{0}"]', github.sha))[0] || 'unknown' }}
-          path: build/_subprojects/*/build/Testing/
-          retention-days: 7
-
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -400,3 +264,141 @@ jobs:
           path: build/staging/
           # Nightly artifacts kept longer than CI artifacts
           retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
+
+  # ---------------------------------------------------------------------------
+  # Test stage — one matrix leg per library, running in parallel. Mirrors a
+  # target device: each leg installs the staged runtime + test-source tree into
+  # ROCM_PATH, then configures, compiles, and runs that library's installed test
+  # suite (share/<lib>/test) against the installed libs — the aggregator never
+  # builds tests itself. Re-fetches the SDK for the toolchain + runtime libs.
+  # CPU-only and non-blocking (continue-on-error): the runner has no GPU, so
+  # GPU-variant tests error but do not fail the pipeline. rocPyDecode disabled.
+  # ---------------------------------------------------------------------------
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:cf4f6d9909056906e4a1c0bc4c245658a0af4c6a6174082a86adfa2d518b7aeb
+      options: --user root
+      env:
+        ROCM_PATH: /opt/rocm-nightly
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lib: mivisionx
+          - lib: rocCV
+          - lib: rocal
+          # - lib: rocpydecode   # disabled for now
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Install extra build tools
+        run: |
+          yum install -y python3-devel make curl 2>/dev/null || true
+          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+
+      # Re-fetch the SDK: provides runtime .so's for all legs, and for rocAL the
+      # amdclang++ toolchain its ctests recompile with (--build-and-test).
+      - name: Fetch nightly ROCm SDK
+        env:
+          SDK_DATE: ${{ inputs.rocm_sdk_date }}
+          SDK_FAMILY: ${{ inputs.rocm_sdk_family }}
+          SDK_URL: ${{ inputs.rocm_sdk_url }}
+        run: |
+          ARGS="--dest ${ROCM_PATH}"
+          if [ -n "${SDK_URL}" ]; then
+            ARGS="${ARGS} --url ${SDK_URL}"
+          else
+            FAMILY="${SDK_FAMILY:-${ROCM_SDK_FAMILY_DEFAULT}}"
+            ARGS="${ARGS} --gpu-family ${FAMILY}"
+            [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
+          fi
+          python3 build_tools/fetch_rocm_sdk.py ${ARGS}
+
+      # Install the staged tree into ROCM_PATH — this is what the runtime +
+      # -test packages deliver on a target device: the libraries under lib/ and
+      # the test sources + data under share/<lib>/test/. The test sources are
+      # standalone CMake projects that find_package() the installed libs.
+      - name: Download staged install
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: staging
+
+      - name: Install staged tree into ROCM_PATH
+        run: |
+          cp -r staging/. "${ROCM_PATH}/"
+          echo "Installed test sources:"
+          ls -d "${ROCM_PATH}"/share/${{ matrix.lib == 'rocCV' && 'roccv' || matrix.lib }}/test 2>/dev/null || true
+
+      # Build + run each library's installed test suite on this runner, exactly
+      # as a target device would from the -test package. Tests are compiled here
+      # (not in the build stage) against the installed libs. CPU-only and
+      # non-blocking — the runner has no GPU, so GPU-variant tests error but do
+      # not fail the pipeline.
+      - name: Build & run tests — ${{ matrix.lib }}
+        continue-on-error: true
+        env:
+          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
+          LD_LIBRARY_PATH: >-
+            ${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib:${{ env.ROCM_PATH }}/lib/rocm_sysdeps/lib
+          AGO_DEFAULT_TARGET: CPU
+          HIP_PLATFORM: amd
+        run: |
+          case "${{ matrix.lib }}" in
+            mivisionx)
+              TEST_SRC="${ROCM_PATH}/share/mivisionx/test"
+              FILTER='-R openvx_gdf_tests_CPU|openvx_vision_coverage'
+              EXTRA_CMAKE='' ;;
+            rocal)
+              TEST_SRC="${ROCM_PATH}/share/rocal/test"
+              FILTER='-R _cpu$'
+              EXTRA_CMAKE='' ;;
+            rocCV)
+              TEST_SRC="${ROCM_PATH}/share/roccv/test/cpp"
+              FILTER=''
+              # rocCV test exes use std::thread but link no pthread. On
+              # manylinux_2_28 (glibc 2.28) pthread_create/join live in
+              # libpthread; glibc >= 2.34 folds them into libc. Add -pthread.
+              EXTRA_CMAKE='-DCMAKE_EXE_LINKER_FLAGS=-pthread' ;;
+          esac
+
+          echo "=== Configuring installed test sources at ${TEST_SRC} ==="
+          cmake -B test-build -S "${TEST_SRC}" \
+            -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DROCM_PATH="${ROCM_PATH}" \
+            -DBACKEND=HIP \
+            "-DCMAKE_PREFIX_PATH=${ROCM_PATH};${ROCM_PATH}/lib/cmake;${ROCM_PATH}/lib/llvm" \
+            ${EXTRA_CMAKE}
+
+          echo "=== Building tests ==="
+          cmake --build test-build --parallel 4
+
+          echo "=== Running ctest ==="
+          cd test-build
+          COUNT=$(ctest -N 2>&1 | awk '/Total Tests/{print $NF}')
+          echo "Registered tests: ${COUNT:-0}"
+          if [ "${COUNT:-0}" -eq 0 ]; then
+            echo "${{ matrix.lib }}: 0 tests registered — nothing to run"
+            exit 0
+          fi
+          ctest --output-on-failure --parallel 4 \
+            ${FILTER} \
+            --test-output-size-passed 1024 \
+            --test-output-size-failed 102400 \
+            -T Test
+
+      - name: Upload CTest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-results-${{ matrix.lib }}-${{ github.sha }}
+          path: test-build/Testing/
+          retention-days: 7

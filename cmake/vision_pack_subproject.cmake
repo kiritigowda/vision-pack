@@ -135,21 +135,12 @@ function(vision_pack_subproject_activate)
     # Resolve dep stage dirs → CMAKE_PREFIX_PATH for this project
     _vp_deps_to_prefix_path(_dep_prefix_paths ${_deps})
 
-    # Build the prefix path string: dep stages + ROCM_PATH + any core overlays.
-    # The core-X.Y overlay pattern is used by nightly installs where packages
-    # like rpp, rocdecode, rocjpeg install into /opt/rocm/core-10.1/ rather
-    # than /opt/rocm/ directly.
+    # Build the prefix path string: dep stages + ROCM_PATH.
+    # The dcgpu-tests SDK tarball carries rpp/rocdecode/rocjpeg directly under
+    # ROCM_PATH, so no core-X.Y overlay handling is needed.
     set(_prefix_path_list "${_dep_prefix_paths}")
     list(APPEND _prefix_path_list "${ROCM_PATH}")
-    # Add any core-X.Y overlays found under ROCM_PATH
-    file(GLOB _rocm_cores "${ROCM_PATH}/core-*/lib/cmake")
-    foreach(_core ${_rocm_cores})
-      get_filename_component(_core_root "${_core}" DIRECTORY)
-      get_filename_component(_core_root "${_core_root}" DIRECTORY)
-      list(APPEND _prefix_path_list "${_core_root}" "${_core_root}/lib/llvm")
-    endforeach()
-    # Also honour CMAKE_PREFIX_PATH set by the parent (e.g. from CI where
-    # the deb overlay is at a different path than the SDK tarball)
+    # Also honour CMAKE_PREFIX_PATH set by the parent (e.g. from CI)
     if(CMAKE_PREFIX_PATH)
       list(APPEND _prefix_path_list ${CMAKE_PREFIX_PATH})
     endif()

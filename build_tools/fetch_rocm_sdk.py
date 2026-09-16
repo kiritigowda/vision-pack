@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
 """
-Download the latest Quartz nightly ROCm SDK tarball for a given GPU family.
+Download a nightly ROCm SDK tarball.
 
-Usage:
-    python fetch_rocm_sdk.py --gpu-family gfx110X --dest /opt/rocm-nightly
-    python fetch_rocm_sdk.py --gpu-family gfx110X --dest /opt/rocm-nightly --date 20260822
-    python fetch_rocm_sdk.py --list-available --gpu-family gfx110X
+Whichever tarball is used must carry the full SDK (HIP, compiler, rocm_sysdeps)
+*plus* rpp, rocDecode, rocJPEG headers/cmake configs and the rocDecode build
+utils (share/rocdecode/utils) under a single prefix — so no separate deb
+overlay is needed. Vision libs have no GPU kernel code, so any GPU family's
+tarball builds all supported families; pick the variant that bundles the CV
+packages above (dcgpu-tests / multi-arch), not by gfx id.
+
+Two selection modes:
+
+  1. Rolling family+date auto-select from the nightly index (default):
+       python fetch_rocm_sdk.py --gpu-family gfx94X-dcgpu-tests --dest /opt/rocm-nightly
+       python fetch_rocm_sdk.py --gpu-family gfx94X-dcgpu-tests --date 20260914
+       python fetch_rocm_sdk.py --list-available --gpu-family gfx94X-dcgpu-tests
+
+  2. Pin an exact tarball by full URL (e.g. a run-id multi-arch S3 artifact
+     that has no rolling "latest" alias) — bypasses the index entirely:
+       python fetch_rocm_sdk.py --url https://.../therock-dist-linux-....tar.gz \\
+           --dest /opt/rocm-nightly
 """
 import argparse
 import re
@@ -14,7 +28,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-NIGHTLY_BASE = "https://rocm.nightlies.amd.com/tarball-multi-arch"
+NIGHTLY_BASE = "https://nightly.repo.amd.com/rocm/core/tarball"
 INDEX_URL = f"{NIGHTLY_BASE}/"
 
 
@@ -23,8 +37,7 @@ def list_available(gpu_family):
     with urllib.request.urlopen(INDEX_URL) as resp:
         html = resp.read().decode()
     pattern = r"therock-dist-linux-" + re.escape(gpu_family) + r"-[^\"]*\.tar\.gz"
-    tarballs = sorted(set(re.findall(pattern, html)))
-    return [t for t in tarballs if "test" not in t]
+    return sorted(set(re.findall(pattern, html)))
 
 
 def latest_tarball(gpu_family, date=None):
@@ -59,13 +72,19 @@ def download_and_extract(url, dest, strip=1):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch Quartz nightly ROCm SDK tarball")
-    parser.add_argument("--gpu-family", default="gfx110X",
-                        help="GPU family name e.g. gfx110X, gfx1151, gfx120X-all (default: gfx110X)")
+    parser = argparse.ArgumentParser(description="Fetch a nightly ROCm SDK tarball")
+    parser.add_argument("--gpu-family", default="gfx94X-dcgpu-tests",
+                        help="GPU family / variant name e.g. gfx94X-dcgpu-tests (default). "
+                             "The dcgpu-tests variant bundles rpp/rocdecode/rocjpeg + "
+                             "rocdecode/utils needed at build time.")
     parser.add_argument("--dest", type=Path, default=Path("/opt/rocm-nightly"),
                         help="Extraction destination directory (default: /opt/rocm-nightly)")
     parser.add_argument("--date", default=None,
                         help="Pin to a specific date YYYYMMDD (default: latest)")
+    parser.add_argument("--url", default=None,
+                        help="Full tarball URL to download, bypassing index scraping. "
+                             "Use for run-id multi-arch artifacts with no rolling alias. "
+                             "Overrides --gpu-family/--date.")
     parser.add_argument("--list-available", action="store_true",
                         help="List available tarballs and exit")
     parser.add_argument("--print-url", action="store_true",
@@ -78,8 +97,12 @@ def main():
             print(t)
         return
 
-    name, url = latest_tarball(args.gpu_family, args.date)
-    print(f"Selected: {name}")
+    if args.url:
+        url = args.url
+        print(f"Selected (pinned URL): {url.rsplit('/', 1)[-1]}")
+    else:
+        name, url = latest_tarball(args.gpu_family, args.date)
+        print(f"Selected: {name}")
 
     if args.print_url:
         print(url)

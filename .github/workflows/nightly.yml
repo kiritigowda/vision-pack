@@ -16,7 +16,15 @@ on:
   workflow_dispatch:
     inputs:
       rocm_sdk_date:
-        description: 'Quartz nightly date YYYYMMDD (empty = latest)'
+        description: 'Nightly date YYYYMMDD (empty = latest); ignored if rocm_sdk_url set'
+        required: false
+        default: ''
+      rocm_sdk_family:
+        description: 'SDK GPU family/variant to auto-select from the index'
+        required: false
+        default: ''
+      rocm_sdk_url:
+        description: 'Full SDK tarball URL to pin (e.g. run-id multi-arch); overrides family/date'
         required: false
         default: ''
       skip_bump:
@@ -76,6 +84,8 @@ jobs:
     with:
       ref: ${{ needs.bump-submodules.outputs.sha }}
       rocm_sdk_date: ${{ inputs.rocm_sdk_date || '' }}
+      rocm_sdk_family: ${{ inputs.rocm_sdk_family || '' }}
+      rocm_sdk_url: ${{ inputs.rocm_sdk_url || '' }}
       release_type: nightly
 
   # ---------------------------------------------------------------------------

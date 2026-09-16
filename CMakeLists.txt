@@ -45,6 +45,11 @@ option(VISION_PACK_ENABLE_ROCAL       "Build rocAL"        ON)
 option(VISION_PACK_ENABLE_ROCCV       "Build rocCV"        ON)
 option(VISION_PACK_ENABLE_ROCPYDECODE "Build rocPyDecode"  ON)
 
+# Note: the aggregator never compiles the libraries' test suites. Each library
+# installs its test *sources* + data as a `test` component (→ share/<lib>/test),
+# which the -test packages ship. Tests are built on the target device against
+# the installed runtime — the CI test stage mirrors that. So no -DTESTS=ON here.
+
 # ---------------------------------------------------------------------------
 # Build parallelism for sub-builds
 # ---------------------------------------------------------------------------
@@ -99,31 +104,10 @@ if(VISION_PACK_ENABLE_ROCCV)
 endif()
 
 # rocPyDecode — depends only on rocDecode/rocJPEG already in the SDK.
-# rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils for utility sources.
-# Detect whether they live at the root or in a core-X.Y overlay.
-if(NOT DEFINED ROCPYDECODE_ROCM_PATH)
-  # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils.
-  # In CI the deb extraction symlinks that path into the SDK tarball root
-  # so ROCM_PATH works directly. For local builds, fall back to searching
-  # for a core-X.Y overlay if the utils aren't at ROCM_PATH.
-  if(EXISTS "${ROCM_PATH}/share/rocdecode/utils")
-    set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}")
-  else()
-    file(GLOB _rocm_cores "${ROCM_PATH}/core-*/share/rocdecode/utils")
-    if(_rocm_cores)
-      list(GET _rocm_cores 0 _core_utils)
-      get_filename_component(_core_root "${_core_utils}" DIRECTORY)
-      get_filename_component(_core_root "${_core_root}" DIRECTORY)
-      get_filename_component(_core_root "${_core_root}" DIRECTORY)
-      set(ROCPYDECODE_ROCM_PATH "${_core_root}")
-    else()
-      set(ROCPYDECODE_ROCM_PATH "${ROCM_PATH}")
-    endif()
-  endif()
-endif()
-message(STATUS "[vision-pack] rocPyDecode ROCM_PATH: ${ROCPYDECODE_ROCM_PATH}")
+# rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils for utility sources,
+# which the dcgpu-tests SDK tarball provides directly under ROCM_PATH.
 if(VISION_PACK_ENABLE_ROCPYDECODE)
-  set(_rocpydecode_cmake_args "-DROCM_PATH=${ROCPYDECODE_ROCM_PATH}")
+  set(_rocpydecode_cmake_args "-DROCM_PATH=${ROCM_PATH}")
   # rocpydecode calls find_package(Python3 ... Development) which needs
   # libpython3.x.so. Forward Python3_ROOT_DIR if set (e.g. to
   # /opt/python-shared in manylinux where the default Python is static).
@@ -171,15 +155,22 @@ if(VISION_PACK_ENABLE_ROCAL)
   endif()
 
   if(VISION_PACK_BUNDLE_PROTOBUF)
-    list(APPEND _rocal_extra_deps libprotobuf)
+    list(APPEND _rocal_extra_deps libprotobuf protoc)
+    # rocAL calls find_package(Protobuf QUIET) with no CONFIG keyword, so the
+    # builtin FindProtobuf.cmake (MODULE mode) runs. Config-package hints
+    # (Protobuf_ROOT, protobuf_MODULE_COMPATIBLE) are inert in module mode, so
+    # seed the exact result cache variables FindProtobuf reads. Pre-set as
+    # cache entries, its find_library/find_path/find_program calls are no-ops
+    # and it resolves the bundled build tree — setting Protobuf_FOUND and the
+    # PROTOBUF_LIBRARIES/INCLUDE_DIRS that rocAL's dep check and codegen need.
+    set(_pb_src "${CMAKE_CURRENT_SOURCE_DIR}/third-party/protobuf/src")
+    set(_pb_build "${CMAKE_BINARY_DIR}/third-party/protobuf-build")
     list(APPEND _rocal_cmake_args
-      "-DProtobuf_ROOT=${CMAKE_BINARY_DIR}/third-party/protobuf-build"
-      "-DCMAKE_POLICY_DEFAULT_CMP0074=NEW"
-      # protobuf v3.21.x config-mode find_package sets up protobuf:: targets
-      # but does NOT set Protobuf_FOUND/PROTOBUF_LIBRARIES unless MODULE_COMPATIBLE
-      # is ON. rocAL checks Protobuf_FOUND and uses PROTOBUF_LIBRARIES, so this
-      # flag is required or rocAL's dependency check fails at configure time.
-      "-Dprotobuf_MODULE_COMPATIBLE=ON"
+      "-DProtobuf_INCLUDE_DIR=${_pb_src}"
+      "-DProtobuf_LIBRARY_RELEASE=${_pb_build}/libprotobuf.a"
+      "-DProtobuf_LITE_LIBRARY_RELEASE=${_pb_build}/libprotobuf-lite.a"
+      "-DProtobuf_PROTOC_LIBRARY_RELEASE=${_pb_build}/libprotoc.a"
+      "-DProtobuf_PROTOC_EXECUTABLE=${_pb_build}/protoc"
     )
   endif()
 
