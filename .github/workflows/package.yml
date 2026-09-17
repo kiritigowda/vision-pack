@@ -80,6 +80,11 @@ jobs:
 
       - name: Show staging layout
         run: |
+          echo "=== Top-level staging dirs ==="
+          ls -la staging/ || echo "(staging missing)"
+          echo "=== include/ tree (headers the -devel packages need) ==="
+          find staging/include -maxdepth 2 2>/dev/null | sort | head -40 \
+            || echo "(no staging/include — CPack -devel installs will fail)"
           echo "=== Shared libraries ==="
           find staging/ -name "*.so*" | sort | head -30
           echo ""

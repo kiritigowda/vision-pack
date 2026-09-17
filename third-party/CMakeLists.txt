@@ -111,16 +111,18 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
   endforeach()
   vision_pack_provide_package(protobuf Protobuf "third-party/protobuf-build")
   # Install the shared protobuf libs into rocm_sysdeps/. protobuf writes its
-  # .so's (with versioned SONAME symlinks) directly into protobuf-build/, not a
-  # GNUInstallDirs prefix, so the lib64 gotcha doesn't apply here. Glob the
-  # build dir to catch libprotobuf.so + libprotobuf.so.3.21.12 + symlinks.
-  install(DIRECTORY "${CMAKE_BINARY_DIR}/third-party/protobuf-build/"
-    DESTINATION "${VP_SYSDEPS_LIBDIR}"
-    COMPONENT runtime
-    FILES_MATCHING
-      PATTERN "libprotobuf.so*"
-      PATTERN "libprotobuf-lite.so*"
-  )
+  # .so's (with versioned SONAME symlinks) directly into protobuf-build/. Use a
+  # glob of just the top-level .so files (not install(DIRECTORY), which would
+  # recurse the whole build tree and drag in CMakeFiles/ etc.). The glob is
+  # evaluated at install time via a small install(CODE) so the versioned
+  # SONAMEs + symlinks that only exist after the build are all captured.
+  install(CODE "
+    file(GLOB _pb_sos
+      \"${CMAKE_BINARY_DIR}/third-party/protobuf-build/libprotobuf.so*\"
+      \"${CMAKE_BINARY_DIR}/third-party/protobuf-build/libprotobuf-lite.so*\")
+    file(INSTALL \${_pb_sos}
+      DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${VP_SYSDEPS_LIBDIR}\")
+  " COMPONENT runtime)
   message(STATUS "[vision-pack] protobuf v3.21.12 (shared) → ${VP_SYSDEPS_LIBDIR}")
 elseif(VISION_PACK_ENABLE_ROCAL)
   find_package(Protobuf REQUIRED)
