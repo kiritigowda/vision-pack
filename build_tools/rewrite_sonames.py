@@ -79,6 +79,9 @@ def new_basename(old_basename):
 def rewrite_sysdeps(sysdeps_dir):
     """Rename bundled .so files + set their SONAME. Returns old->new SONAME map."""
     soname_map = {}
+    # SONAME -> real (renamed) file basename, so we can recreate the versioned
+    # loader symlink (e.g. libprotobuf-rocm-vision.so.32 -> ...so.3.21.12.0).
+    soname_real = {}
     # Real files first (skip symlinks — we recreate those from scratch after).
     real_sos = sorted(
         p for p in sysdeps_dir.glob("lib*.so*")
@@ -104,18 +107,32 @@ def rewrite_sysdeps(sysdeps_dir):
         _run(["patchelf", "--set-soname", new_soname, str(new_path)])
         if old_soname:
             soname_map[old_soname] = new_soname
+        soname_real[new_soname] = new_name
         print(f"  renamed {so.name} -> {new_name}  (soname {old_soname or '-'} -> {new_soname})")
 
-    # Remove any stale symlinks left under the old names, then recreate the
-    # unversioned dev symlink (libNAME-rocm-vision.so -> ...so.MAJOR) pointing at
-    # the highest-versioned real file for each renamed stem.
+    # Drop any stale symlinks left under the old stock names; we recreate the
+    # ones we need from scratch below.
     for link in sorted(p for p in sysdeps_dir.glob("lib*.so*") if p.is_symlink()):
         if new_basename(link.name) is not None:
-            link.unlink()  # stale stock-named symlink
+            link.unlink()
 
+    # Recreate the versioned SONAME symlink (libNAME-rocm-vision.so.MAJOR ->
+    # the real ...so.MAJOR.MINOR.PATCH file). This is the name every consumer's
+    # DT_NEEDED points at, so the runtime loader resolves it here.
+    for new_soname, real_name in soname_real.items():
+        if new_soname == real_name:
+            continue  # SONAME is already the real file itself
+        link = sysdeps_dir / new_soname
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(real_name)
+        print(f"  symlink {link.name} -> {real_name}")
+
+    # Recreate the unversioned dev symlink (libNAME-rocm-vision.so ->
+    # highest-versioned real file) for each renamed stem.
     for stem in SYSDEP_STEMS:
         versioned = sorted(
-            sysdeps_dir.glob(f"lib{stem}{SUFFIX}.so.*"),
+            (p for p in sysdeps_dir.glob(f"lib{stem}{SUFFIX}.so.*") if not p.is_symlink()),
             key=lambda p: [int(x) for x in p.name.split(".so.")[-1].split(".")],
         )
         if not versioned:
