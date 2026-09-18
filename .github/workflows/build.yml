@@ -211,9 +211,18 @@ jobs:
       - name: Install to staging
         run: |
           mkdir -p build/staging
+          # Copy each subproject's completed stage tree into build/staging.
+          # We copy rather than re-run `cmake --install --prefix` because some
+          # upstream install rules use absolute DESTINATION
+          # ${CMAKE_INSTALL_PREFIX}/... paths (e.g. MIVisionX header installs),
+          # which a --prefix override does NOT relocate — so headers silently
+          # never reached build/staging and CPack later failed on a missing
+          # include/mivisionx. The per-project stage dirs already contain the
+          # full include/ + lib/ + bin/ + share/ tree, so copying is faithful.
           for proj in mivisionx rocCV rocal; do
-            cmake --install "build/_subprojects/${proj}/build" \
-              --prefix build/staging
+            stage="build/_subprojects/${proj}/stage"
+            echo "Staging ${proj} from ${stage}"
+            cp -a "${stage}/." build/staging/
           done
           # Install the bundled third-party runtime deps (protobuf, turbojpeg,
           # lmdb, libsndfile) → lib/rocm_sysdeps/lib/. These live in the
@@ -237,6 +246,7 @@ jobs:
             "build/staging/bin/runvx:mivisionx runvx tool" \
             "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data" \
             "${SYSDEPS}/libturbojpeg.so*:bundled turbojpeg" \
+            "${SYSDEPS}/libprotobuf.so*:bundled protobuf" \
             "${SYSDEPS}/liblmdb.so*:bundled lmdb" \
             "${SYSDEPS}/libsndfile.so*:bundled libsndfile"; do
             PATH_CHECK="${CHECK%%:*}"
@@ -250,6 +260,16 @@ jobs:
           done
           echo "=== Staged bundled runtime deps ==="
           ls -la "${SYSDEPS}" 2>/dev/null || echo "(rocm_sysdeps/lib missing)"
+          # rocAL must link the shared protobuf (#10): librocal.so should list
+          # libprotobuf.so as a dynamic dependency, not statically embed it.
+          echo "=== librocal.so NEEDED protobuf? ==="
+          if readelf -d build/staging/lib/librocal.so 2>/dev/null \
+              | grep -i "NEEDED.*libprotobuf"; then
+            echo "  librocal links shared protobuf: OK"
+          else
+            echo "  ERROR: librocal.so does not list libprotobuf.so as NEEDED"
+            FAIL=1
+          fi
           [ "${FAIL}" -eq 0 ] || { echo "Staged install verification failed"; exit 1; }
 
       - name: Collect build metadata

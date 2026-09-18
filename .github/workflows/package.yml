@@ -80,6 +80,11 @@ jobs:
 
       - name: Show staging layout
         run: |
+          echo "=== Top-level staging dirs ==="
+          ls -la staging/ || echo "(staging missing)"
+          echo "=== include/ tree (headers the -devel packages need) ==="
+          find staging/include -maxdepth 2 2>/dev/null | sort | head -40 \
+            || echo "(no staging/include — CPack -devel installs will fail)"
           echo "=== Shared libraries ==="
           find staging/ -name "*.so*" | sort | head -30
           echo ""
@@ -110,8 +115,16 @@ jobs:
 
       - name: Configure CPack
         run: |
+          # Use $GITHUB_WORKSPACE (env var), not ${{ github.workspace }}.
+          # This job runs in a container where the repo is mounted at
+          # /__w/... but the github.workspace *context* expands to the host
+          # path /home/runner/work/..., which does not exist inside the
+          # container — CPack then bakes a bad absolute staging path into its
+          # install rules and fails on the first non-OPTIONAL install
+          # (include/mivisionx). $GITHUB_WORKSPACE is set to the container
+          # mount path, so it resolves correctly.
           cmake -B pkg-build -S packaging/ \
-            -DVISION_PACK_STAGING_DIR="${{ github.workspace }}/staging" \
+            -DVISION_PACK_STAGING_DIR="${GITHUB_WORKSPACE}/staging" \
             -DVISION_PACK_VERSION="${{ steps.version.outputs.version }}" \
             -DVISION_PACK_ROCM_VERSION="${{ env.ROCM_VERSION }}" \
             -DVISION_PACK_BUILD_ID="${{ steps.version.outputs.build_id }}"
@@ -141,6 +154,11 @@ jobs:
         run: |
           cmake --build . --target package-meta-vision 2>/dev/null \
             || echo "Meta packages skipped (equivs-build not available)"
+          # equivs-build writes each meta .deb into its WORKING_DIRECTORY
+          # (pkg-build/meta). Collect them next to the component .debs so the
+          # repo/upload steps pick up amdrocm-vision, -sdk and -tests too.
+          cp meta/*.deb . 2>/dev/null || echo "(no meta .debs produced)"
+          echo "Meta packages:"; ls -1 *.deb | grep -E 'amdrocm-vision(-sdk|-tests)?_' || true
 
       - name: Build APT repo metadata
         run: |
@@ -215,15 +233,15 @@ jobs:
           - **amdrocm-mivisionx** — MIVisionX OpenVX engine + RPP extension
           - **amdrocm-rocal** — rocAL augmentation library + Python bindings
           - **amdrocm-roccv** — rocCV GPU image processing + Python bindings
-          - **amdrocm-rocpydecode** — Python video/JPEG hardware decode
-          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, liblmdb, libsndfile)
+          - **amdrocm-pydecode** — Python video/JPEG hardware decode
+          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, libprotobuf, liblmdb, libsndfile)
 
           ## Install (DEB)
           \`\`\`bash
           dpkg -i amdrocm-mivisionx_${VER}_amd64.deb
           dpkg -i amdrocm-rocal_${VER}_amd64.deb
           dpkg -i amdrocm-roccv_${VER}_amd64.deb
-          dpkg -i amdrocm-rocpydecode_${VER}_amd64.deb
+          dpkg -i amdrocm-pydecode_${VER}_amd64.deb
           dpkg -i amdrocm-vision-sysdeps_${VER}_amd64.deb
           \`\`\`
 

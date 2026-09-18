@@ -1,0 +1,11 @@
+Section: devel
+Priority: optional
+Standards-Version: 3.9.2
+
+Package: amdrocm-vision-tests
+Version: @VP_VER@
+Maintainer: ROCm Engineering <rocm-support@amd.com>
+Architecture: amd64
+Depends: amdrocm-vision-sdk (>= @VP_VER@), amdrocm-mivisionx-test (>= @VP_VER@), amdrocm-rocal-test (>= @VP_VER@), amdrocm-roccv-test (>= @VP_VER@), amdrocm-pydecode-test (>= @VP_VER@)
+Description: AMD ROCm Computer Vision test suite meta-package
+ Installs all vision library test suites and the SDK they depend on.
