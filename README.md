@@ -286,8 +286,14 @@ The `package.yml` CI workflow produces:
 - **rocAL cmake exports missing** — no `rocalConfig.cmake` installed.
   [rocAL#514](https://github.com/ROCm/rocAL/issues/514)
 
-- **Python bindings in lib/ instead of site-packages** — rocAL and rocPyDecode
-  install `.so` extension modules to `lib/` requiring manual `PYTHONPATH` setup.
+- **Python bindings in lib/ instead of site-packages** — rocAL, rocCV and
+  rocPyDecode install `.so` extension modules to `/opt/rocm/lib`. vision-pack
+  ships an `amdrocm-vision-pythonpath` package that drops an `amdrocm-vision.pth`
+  into the system `dist-packages`, adding `/opt/rocm/lib` to `sys.path` so
+  `import rocal` / `import rocpycv` / `import rocpydecode` work with no manual
+  `PYTHONPATH`. For a non-system interpreter (venv/conda), still
+  `export PYTHONPATH=/opt/rocm/lib:$PYTHONPATH` or copy the `.pth` into its
+  site-packages. Upstream site-packages fix tracked at
   [rocAL#514](https://github.com/ROCm/rocAL/issues/514),
   [rocPyDecode#285](https://github.com/ROCm/rocPyDecode/issues/285)
 
