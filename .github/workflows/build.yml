@@ -423,7 +423,7 @@ jobs:
       # the test sources + data under share/<lib>/test/. The test sources are
       # standalone CMake projects that find_package() the installed libs.
       - name: Download staged install
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build.outputs.artifact_name }}
           path: staging
