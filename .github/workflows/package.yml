@@ -349,7 +349,11 @@ jobs:
           echo "=== ldd librocal.so (bundled-dep lines) ==="
           LDD="$(ldd /opt/rocm/lib/librocal.so || true)"
           echo "${LDD}" | grep -Ei "rocm-vision|protobuf|turbojpeg|jpeg|lmdb|sndfile" || true
-          BAD=$(echo "${LDD}" | grep -Ei "rocm-vision" | grep -Ev "/opt/rocm/lib/rocm_sysdeps/lib" || true)
+          # Each isolated dep must resolve to a file under rocm_sysdeps/lib, not
+          # a host copy. Match the rocm_sysdeps/lib suffix rather than a literal
+          # absolute path: librocal's RPATH is $ORIGIN/../lib/rocm_sysdeps/lib,
+          # so ldd prints /opt/rocm/lib/../lib/rocm_sysdeps/lib (unnormalized).
+          BAD=$(echo "${LDD}" | grep -Ei "rocm-vision" | grep -Ev "rocm_sysdeps/lib" || true)
           if [ -n "${BAD}" ]; then
             echo "ERROR: an isolated dep resolved outside rocm_sysdeps:"; echo "${BAD}"; exit 1
           fi
