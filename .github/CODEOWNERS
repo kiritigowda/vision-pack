@@ -1,0 +1,17 @@
+# Code ownership for vision-pack.
+# The last matching pattern takes precedence.
+#
+# See GOVERNANCE.md for the maintainer model. As additional maintainers join,
+# add more specific path owners below.
+
+# Fallback owner for everything.
+*                       @kiritigowda
+
+# Build orchestration and packaging.
+/CMakeLists.txt         @kiritigowda
+/cmake/                 @kiritigowda
+/packaging/             @kiritigowda
+/build_tools/           @kiritigowda
+
+# CI/CD workflows.
+/.github/               @kiritigowda
