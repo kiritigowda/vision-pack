@@ -163,6 +163,21 @@ jobs:
           # repo/upload steps pick up amdrocm-vision, -sdk and -tests too.
           cp meta/*.deb . 2>/dev/null || echo "(no meta .debs produced)"
           echo "Meta packages:"; ls -1 *.deb | grep -E 'amdrocm-vision(-sdk|-tests)?_' || true
+          # #3 AC2: when equivs-build is present (it is in CI, installed above),
+          # all three meta-packages must be produced. equivs-build builds one
+          # .deb per control file, so a missing stanza/template silently drops a
+          # package — assert each exists rather than soft-passing.
+          if command -v equivs-build >/dev/null 2>&1; then
+            MISSING=0
+            for m in amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests; do
+              if ls "${m}_"*.deb >/dev/null 2>&1; then
+                echo "  ${m}: OK"
+              else
+                echo "  ERROR: meta-package ${m} was not produced"; MISSING=1
+              fi
+            done
+            [ "${MISSING}" -eq 0 ] || { echo "Meta-package generation incomplete"; exit 1; }
+          fi
 
       - name: Build APT repo metadata
         run: |
@@ -376,3 +391,65 @@ jobs:
               sys.exit(1)
           print(".pth registered /opt/rocm/lib on sys.path: OK")
           PY
+
+  # ---------------------------------------------------------------------------
+  # Downstream find_package() smoke test (#3, acceptance criterion 3).
+  #
+  # Upstream MIVisionX/rocAL ship no package config (MIVisionX#1761, rocAL#514),
+  # so vision-pack installs transitional FindMIVisionX.cmake / Findrocal.cmake
+  # shims into lib/cmake. This job proves a downstream CMake project can actually
+  # find_package(MIVisionX) / find_package(rocal) after installing only the -dev
+  # DEBs — a green configure means the shims resolved headers + libraries.
+  #
+  # Unlike smoke-test (deliberately no build tools), this needs cmake + a C++
+  # compiler, so it runs on the host runner rather than the bare container.
+  # ---------------------------------------------------------------------------
+  findpackage-test:
+    needs: package
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Install cmake + compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake g++ dpkg-dev
+
+      - name: Download DEB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vision-pack-deb-${{ needs.package.outputs.version }}-${{ needs.package.outputs.build_id }}
+          path: debs/
+
+      - name: Install -dev DEBs
+        run: |
+          set -eux
+          # CPack emits amdrocm-vision-<ver>-Linux-<component>.deb. The -dev
+          # components carry the headers + the Find*.cmake shims. Their runtime
+          # counterparts pull external ROCm deps not present here, so force-
+          # install payloads to lay down the files we need to discover.
+          deb() { find debs -name "amdrocm-vision-*-Linux-$1.deb" | head -1; }
+          for comp in rocm-sysdeps-vision mivisionx mivisionx-dev rocal rocal-dev; do
+            f="$(deb "$comp")"
+            [ -n "$f" ] && sudo dpkg --force-depends -i "$f" || echo "(skip $comp)"
+          done
+          echo "=== installed cmake shims ==="
+          ls -la /opt/rocm/lib/cmake/Find*.cmake
+
+      - name: Configure a downstream project against the shims
+        run: |
+          set -eu
+          WORK="$(mktemp -d)"
+          cat > "${WORK}/CMakeLists.txt" <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(vp_findpackage_smoke LANGUAGES CXX)
+          list(APPEND CMAKE_MODULE_PATH "/opt/rocm/lib/cmake")
+          find_package(MIVisionX REQUIRED)
+          find_package(rocal REQUIRED)
+          message(STATUS "MIVisionX_LIBRARIES=${MIVisionX_LIBRARIES}")
+          message(STATUS "MIVisionX_INCLUDE_DIRS=${MIVisionX_INCLUDE_DIRS}")
+          message(STATUS "rocal_LIBRARIES=${rocal_LIBRARIES}")
+          message(STATUS "rocal_INCLUDE_DIRS=${rocal_INCLUDE_DIRS}")
+          CMAKE
+          echo "=== configuring downstream find_package project ==="
+          cmake -S "${WORK}" -B "${WORK}/build" -DROCM_PATH=/opt/rocm
+          echo "find_package(MIVisionX) and find_package(rocal) resolved: OK"
