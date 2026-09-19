@@ -67,7 +67,7 @@ jobs:
       build_id: ${{ steps.version.outputs.build_id }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install packaging tools
         run: |
