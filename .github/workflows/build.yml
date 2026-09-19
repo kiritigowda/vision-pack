@@ -294,6 +294,32 @@ jobs:
           else
             echo "  no stock bundled SONAMEs referenced: OK"
           fi
+          # SxS guarantee (#4): librocal.so must carry an RPATH to rocm_sysdeps.
+          # rocAL forces CMAKE_SKIP_INSTALL_RPATH, so rewrite_sonames.py re-adds
+          # it; without it the loader can't find the isolated *-rocm-vision deps
+          # even though they sit in rocm_sysdeps/lib (the clean-runner failure).
+          echo "=== librocal.so RPATH to rocm_sysdeps? ==="
+          RPATH="$(readelf -d build/staging/lib/librocal.so 2>/dev/null \
+            | grep -Ei 'R(UN)?PATH')"
+          echo "  ${RPATH:-<none>}"
+          if echo "${RPATH}" | grep -q 'rocm_sysdeps/lib'; then
+            echo "  librocal RPATH resolves bundled sysdeps: OK"
+          else
+            echo "  ERROR: librocal.so has no RPATH to rocm_sysdeps/lib"
+            FAIL=1
+          fi
+          # Each isolated SONAME must have its versioned loader symlink so the
+          # DT_NEEDED entry resolves (e.g. libprotobuf-rocm-vision.so.32).
+          echo "=== isolated SONAME symlinks resolve? ==="
+          for SO in $(readelf -d build/staging/lib/librocal.so 2>/dev/null \
+              | grep -i NEEDED | grep -oiE 'lib[a-z0-9._-]*-rocm-vision\.so[0-9.]*'); do
+            if [ -e "${SYSDEPS}/${SO}" ]; then
+              echo "  ${SO}: OK"
+            else
+              echo "  ERROR: NEEDED ${SO} has no file/symlink in rocm_sysdeps/lib"
+              FAIL=1
+            fi
+          done
           [ "${FAIL}" -eq 0 ] || { echo "Staged install verification failed"; exit 1; }
 
       - name: Collect build metadata

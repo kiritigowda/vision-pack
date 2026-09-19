@@ -51,6 +51,14 @@ SUFFIX = "-rocm-vision"
 # bundled sysdeps and must have those references rewritten.
 CONSUMER_GLOBS = ["lib/librocal.so", "lib/librocal.so.*"]
 
+# RPATH every consumer must carry so the loader finds the bundled sysdeps
+# in rocm_sysdeps/lib at runtime. Matches VP_INSTALL_RPATH in CMakeLists.txt.
+# rocAL forces CMAKE_SKIP_INSTALL_RPATH (rocAL CMakeLists.txt), stripping the
+# RPATH our ExternalProject passes via -DCMAKE_INSTALL_RPATH, so librocal.so
+# ships with no RPATH and cannot locate the renamed *-rocm-vision deps. We
+# re-add it here (post-build, no submodule edit).
+CONSUMER_RPATH = "$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib"
+
 # Matches libNAME.so, libNAME.so.MAJOR, libNAME.so.MAJOR.MINOR.PATCH
 _SO_RE = re.compile(r"^lib(?P<stem>.+?)\.so(?P<ver>(?:\.\d+)*)$")
 
@@ -147,9 +155,15 @@ def rewrite_sysdeps(sysdeps_dir):
     return soname_map
 
 
+def _current_rpath(path):
+    """Return the DT_RUNPATH/DT_RPATH string on an ELF ('' if none)."""
+    return subprocess.run(
+        ["patchelf", "--print-rpath", str(path)],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
 def patch_consumers(root, soname_map):
-    if not soname_map:
-        return
     consumers = []
     for pattern in CONSUMER_GLOBS:
         consumers.extend(sorted(root.glob(pattern)))
@@ -164,6 +178,12 @@ def patch_consumers(root, soname_map):
             if old_soname in needed:
                 _run(["patchelf", "--replace-needed", old_soname, new_soname, str(consumer)])
                 print(f"  {consumer.name}: NEEDED {old_soname} -> {new_soname}")
+        # rocAL strips its install RPATH (CMAKE_SKIP_INSTALL_RPATH), so
+        # re-add the one that locates the bundled sysdeps at runtime.
+        rpath_parts = [p for p in _current_rpath(consumer).split(":") if p]
+        if "$ORIGIN/../lib/rocm_sysdeps/lib" not in rpath_parts:
+            _run(["patchelf", "--set-rpath", CONSUMER_RPATH, str(consumer)])
+            print(f"  {consumer.name}: RPATH -> {CONSUMER_RPATH}")
 
 
 def verify(root):
