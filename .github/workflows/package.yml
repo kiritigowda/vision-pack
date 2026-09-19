@@ -62,6 +62,10 @@ jobs:
     env:
       ROCM_VERSION: ${{ inputs.rocm_version || '10.2.0' }}
 
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_id: ${{ steps.version.outputs.build_id }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -257,11 +261,118 @@ jobs:
             vision-pack-dist-linux-multiarch-*.tar.gz \
             2>/dev/null || echo "Release upload skipped (no packages)"
 
-      - name: Smoke test DEB install
+  # ---------------------------------------------------------------------------
+  # Clean-runner package-install smoke test (#4).
+  #
+  # Installs the produced runtime DEBs on a pristine ubuntu:24.04 (no build
+  # tools, no ROCm SDK) and asserts the side-by-side isolation guarantee:
+  #   1. librocal.so's bundled-dep NEEDED entries are all private
+  #      *-rocm-vision SONAMEs (never the stock names).
+  #   2. Even with host copies of protobuf/turbojpeg/lmdb/sndfile installed on
+  #      the default loader path, ldd resolves the bundled deps to
+  #      /opt/rocm/lib/rocm_sysdeps/lib, not /usr/lib.
+  #   3. The amdrocm-vision.pth registers /opt/rocm/lib on sys.path so the
+  #      vision Python modules are importable with no PYTHONPATH.
+  # ---------------------------------------------------------------------------
+  smoke-test:
+    needs: package
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:24.04
+      options: --user root
+
+    steps:
+      - name: Install minimal runtime tools
         run: |
-          if ls pkg-build/amdrocm-mivisionx_*.deb 1>/dev/null 2>&1; then
-            dpkg -i pkg-build/amdrocm-mivisionx_*.deb 2>/dev/null \
-              || dpkg --ignore-depends=amdrocm-rpp \
-                   -i pkg-build/amdrocm-mivisionx_*.deb \
-              || echo "DEB install skipped (missing ROCm deps on packaging runner)"
+          apt-get update -qq
+          # binutils → readelf; libc-bin → ldd; python3 for the import check.
+          # NO build tools, NO ROCm — this is a clean runtime host on purpose.
+          apt-get install -y --no-install-recommends binutils libc-bin python3
+
+      - name: Download DEB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vision-pack-deb-${{ needs.package.outputs.version }}-${{ needs.package.outputs.build_id }}
+          path: debs/
+
+      - name: Install runtime DEBs
+        run: |
+          set -eux
+          # CPack emits amdrocm-vision-<ver>-Linux-<component>.deb. Install the
+          # sysdeps + pythonpath first (no external deps), then the vision libs.
+          find debs -name '*.deb' -print
+          deb() { find debs -name "amdrocm-vision-*-Linux-$1.deb" | head -1; }
+          dpkg -i "$(deb rocm-sysdeps-vision)" "$(deb pythonpath)"
+          # rocal/roccv/mivisionx carry external ROCm depends (rpp/hip/decode/
+          # jpeg) not present on a bare runner; force-install the payloads so we
+          # can inspect the shipped .so files for isolation.
+          for comp in mivisionx roccv rocal; do
+            f="$(deb "$comp")"
+            [ -n "$f" ] && dpkg --force-depends -i "$f"
+          done
+          echo "=== installed vision tree ==="
+          ls -la /opt/rocm/lib/rocm_sysdeps/lib/ || true
+
+      - name: Assert bundled SONAMEs are isolated
+        run: |
+          set -eu
+          FAIL=0
+          LIB=/opt/rocm/lib/librocal.so
+          if [ ! -e "$LIB" ]; then
+            echo "ERROR: $LIB not installed"; exit 1
           fi
+          echo "=== librocal.so NEEDED ==="
+          NEEDED="$(readelf -d "$LIB" | grep -i NEEDED || true)"
+          echo "${NEEDED}"
+          # Every bundled-dep reference must be a private *-rocm-vision SONAME.
+          if echo "${NEEDED}" \
+              | grep -Ei "lib(protobuf|protobuf-lite|turbojpeg|jpeg|lmdb|sndfile)\.so" \
+              | grep -qiv "rocm-vision"; then
+            echo "ERROR: librocal.so references a stock bundled SONAME"; FAIL=1
+          fi
+          if ! echo "${NEEDED}" | grep -qi "libprotobuf-rocm-vision"; then
+            echo "ERROR: librocal.so missing isolated protobuf NEEDED"; FAIL=1
+          fi
+          [ "${FAIL}" -eq 0 ] || exit 1
+          echo "librocal.so bundled deps are all isolated: OK"
+
+      - name: Assert host copies do not shadow bundled deps
+        run: |
+          set -eu
+          # Install conflicting host copies with the STOCK sonames on the
+          # default loader path. If isolation works, ldd must still bind the
+          # bundled *-rocm-vision copies from rocm_sysdeps, not these.
+          apt-get install -y --no-install-recommends \
+            libprotobuf32t64 libturbojpeg0 liblmdb0 libsndfile1 || \
+          apt-get install -y --no-install-recommends \
+            libprotobuf-lite32t64 libturbojpeg0 liblmdb0 libsndfile1 || true
+          echo "=== ldd librocal.so (bundled-dep lines) ==="
+          LDD="$(ldd /opt/rocm/lib/librocal.so || true)"
+          echo "${LDD}" | grep -Ei "rocm-vision|protobuf|turbojpeg|jpeg|lmdb|sndfile" || true
+          # Each isolated dep must resolve to a file under rocm_sysdeps/lib, not
+          # a host copy. Match the rocm_sysdeps/lib suffix rather than a literal
+          # absolute path: librocal's RPATH is $ORIGIN/../lib/rocm_sysdeps/lib,
+          # so ldd prints /opt/rocm/lib/../lib/rocm_sysdeps/lib (unnormalized).
+          BAD=$(echo "${LDD}" | grep -Ei "rocm-vision" | grep -Ev "rocm_sysdeps/lib" || true)
+          if [ -n "${BAD}" ]; then
+            echo "ERROR: an isolated dep resolved outside rocm_sysdeps:"; echo "${BAD}"; exit 1
+          fi
+          echo "bundled deps resolve to rocm_sysdeps despite host copies: OK"
+
+      - name: Assert Python path registration (no PYTHONPATH)
+        run: |
+          set -eu
+          unset PYTHONPATH || true
+          echo "=== .pth shipped? ==="
+          ls -l /usr/lib/python3/dist-packages/amdrocm-vision.pth
+          echo "=== /opt/rocm/lib on sys.path? ==="
+          python3 - <<'PY'
+          import sys
+          hit = any(p.rstrip("/") == "/opt/rocm/lib" for p in sys.path)
+          print("sys.path entries under /opt/rocm:",
+                [p for p in sys.path if "/opt/rocm" in p])
+          if not hit:
+              print("ERROR: /opt/rocm/lib not on sys.path — .pth not honored")
+              sys.exit(1)
+          print(".pth registered /opt/rocm/lib on sys.path: OK")
+          PY

@@ -60,6 +60,7 @@ set(CPACK_COMPONENTS_ALL
     roccv      roccv-dev     roccv-test
     rocpydecode               rocpydecode-test
     rocm-sysdeps-vision
+    pythonpath
 )
 
 # ---------------------------------------------------------------------------
@@ -84,6 +85,10 @@ set(CPACK_COMPONENT_ROCM_SYSDEPS_VISION_DISPLAY_NAME "AMD rocCV bundled runtime 
 set(CPACK_COMPONENT_ROCM_SYSDEPS_VISION_DESCRIPTION
     "Bundled runtime libs (libturbojpeg, libprotobuf, liblmdb, libsndfile) "
     "installed into lib/rocm_sysdeps/lib/ alongside existing ROCm sysdeps.")
+set(CPACK_COMPONENT_PYTHONPATH_DISPLAY_NAME     "AMD ROCm vision Python path")
+set(CPACK_COMPONENT_PYTHONPATH_DESCRIPTION
+    "Registers /opt/rocm/lib on the Python path (.pth) so the vision Python "
+    "modules import without manual PYTHONPATH setup.")
 
 # ---------------------------------------------------------------------------
 # Install rules — paths match /opt/rocm exactly
@@ -201,15 +206,31 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpyjpegdecode/tests"
 
 # --- Bundled runtime deps → lib/rocm_sysdeps/lib/ (same as ROCm sysdeps) ---
 # These are installed alongside the existing zlib, bzip2 etc. in rocm_sysdeps.
+# The build stage rewrites their SONAMEs to private *-rocm-vision names for
+# side-by-side isolation from host copies (build_tools/rewrite_sonames.py, #4),
+# so the patterns match the renamed files, not the stock upstream names.
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/"
     DESTINATION lib/rocm_sysdeps/lib COMPONENT rocm-sysdeps-vision
     FILES_MATCHING
-      PATTERN "libturbojpeg.so*"
-      PATTERN "libjpeg.so*"
-      PATTERN "libprotobuf.so*"
-      PATTERN "libprotobuf-lite.so*"
-      PATTERN "liblmdb.so*"
-      PATTERN "libsndfile.so*"
+      PATTERN "libturbojpeg-rocm-vision.so*"
+      PATTERN "libjpeg-rocm-vision.so*"
+      PATTERN "libprotobuf-rocm-vision.so*"
+      PATTERN "libprotobuf-lite-rocm-vision.so*"
+      PATTERN "liblmdb-rocm-vision.so*"
+      PATTERN "libsndfile-rocm-vision.so*"
+)
+
+# --- Python path registration (.pth) → host site-packages (#4) ---
+# The vision Python modules (rocal_pybind, rocpycv, rocpydecode, ...) install
+# flat into /opt/rocm/lib, which is not on the interpreter's sys.path, so users
+# otherwise need `export PYTHONPATH=/opt/rocm/lib`. A .pth file adds that dir to
+# sys.path automatically — but only when it lives in a *real* site directory, so
+# we install it to the host's absolute dist-packages, not under /opt/rocm. One
+# dedicated component owns the file so the three runtime packages can each
+# depend on it without a dpkg file-overwrite conflict.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/python/amdrocm-vision.pth"
+    DESTINATION /usr/lib/python3/dist-packages
+    COMPONENT pythonpath
 )
 
 # ---------------------------------------------------------------------------
@@ -234,16 +255,19 @@ set(CPACK_DEBIAN_ROCCV-TEST_PACKAGE_NAME           "amdrocm-roccv-test")
 set(CPACK_DEBIAN_ROCPYDECODE_PACKAGE_NAME          "amdrocm-pydecode")
 set(CPACK_DEBIAN_ROCPYDECODE-TEST_PACKAGE_NAME     "amdrocm-pydecode-test")
 set(CPACK_DEBIAN_ROCM-SYSDEPS-VISION_PACKAGE_NAME  "amdrocm-vision-sysdeps")
+set(CPACK_DEBIAN_PYTHONPATH_PACKAGE_NAME           "amdrocm-vision-pythonpath")
 
-# Runtime deps — only the ROCm components; bundled C libs ship in sysdeps package
+# Runtime deps — only the ROCm components; bundled C libs ship in sysdeps package.
+# The three Python-binding packages pull in amdrocm-vision-pythonpath so
+# `import rocal` / `import rocpycv` / `import rocpydecode` work with no PYTHONPATH.
 set(CPACK_DEBIAN_MIVISIONX_PACKAGE_DEPENDS
     "amdrocm-rpp (>= ${VP_ROCM}), hip-runtime-amd (>= ${VP_ROCM})")
 set(CPACK_DEBIAN_ROCAL_PACKAGE_DEPENDS
-    "amdrocm-mivisionx (>= ${VP_VER}), amdrocm-vision-sysdeps (>= ${VP_VER}), amdrocm-decode (>= ${VP_ROCM}), amdrocm-jpeg (>= ${VP_ROCM})")
+    "amdrocm-mivisionx (>= ${VP_VER}), amdrocm-vision-sysdeps (>= ${VP_VER}), amdrocm-vision-pythonpath (>= ${VP_VER}), amdrocm-decode (>= ${VP_ROCM}), amdrocm-jpeg (>= ${VP_ROCM})")
 set(CPACK_DEBIAN_ROCCV_PACKAGE_DEPENDS
-    "hip-runtime-amd (>= ${VP_ROCM})")
+    "amdrocm-vision-pythonpath (>= ${VP_VER}), hip-runtime-amd (>= ${VP_ROCM})")
 set(CPACK_DEBIAN_ROCPYDECODE_PACKAGE_DEPENDS
-    "amdrocm-decode (>= ${VP_ROCM}), amdrocm-jpeg (>= ${VP_ROCM})")
+    "amdrocm-vision-pythonpath (>= ${VP_VER}), amdrocm-decode (>= ${VP_ROCM}), amdrocm-jpeg (>= ${VP_ROCM})")
 
 # ---------------------------------------------------------------------------
 # RPM settings
@@ -266,6 +290,7 @@ set(CPACK_RPM_ROCCV-TEST_PACKAGE_NAME           "amdrocm-roccv-test")
 set(CPACK_RPM_ROCPYDECODE_PACKAGE_NAME          "amdrocm-pydecode")
 set(CPACK_RPM_ROCPYDECODE-TEST_PACKAGE_NAME     "amdrocm-pydecode-test")
 set(CPACK_RPM_ROCM-SYSDEPS-VISION_PACKAGE_NAME  "amdrocm-vision-sysdeps")
+set(CPACK_RPM_PYTHONPATH_PACKAGE_NAME           "amdrocm-vision-pythonpath")
 
 # ---------------------------------------------------------------------------
 # Generators

@@ -1,0 +1,8 @@
+# Build trees
+/build/
+/pkg-build/
+/staging/
+
+# Python
+__pycache__/
+*.pyc

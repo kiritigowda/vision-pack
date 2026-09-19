@@ -122,7 +122,9 @@ jobs:
       #     (manylinux /opt/python builds lack dev headers in the system path)
       - name: Install extra build tools
         run: |
-          yum install -y python3-devel make curl 2>/dev/null || true
+          # patchelf: rewrite bundled sysdep SONAMEs post-build for side-by-side
+          # isolation from host copies (rewrite_sonames.py, #4).
+          yum install -y python3-devel make curl patchelf 2>/dev/null || true
 
           echo "=== Build environment ==="
           cmake --version
@@ -233,6 +235,14 @@ jobs:
           # exists in the packaging project, so it silently matched nothing.
           cmake --install build --prefix build/staging --component runtime
 
+      # Side-by-side isolation (#4): rename the bundled sysdeps
+      # (protobuf/turbojpeg/lmdb/libsndfile) to private *-rocm-vision SONAMEs and
+      # rewrite librocal.so's DT_NEEDED to match, so a host copy of any of these
+      # on the default loader path can never shadow our bundled build. Runs here
+      # because the bundled .so's and librocal.so only coexist after staging.
+      - name: Rewrite bundled sysdep SONAMEs (SxS isolation, #4)
+        run: python3 build_tools/rewrite_sonames.py build/staging
+
       # Fail fast if the staged install is missing anything the packaging or
       # test stages rely on — libs, the runvx tool, and rocAL's test dataset.
       - name: Verify install
@@ -245,10 +255,10 @@ jobs:
             "build/staging/lib/libroccv.so:rocCV libroccv" \
             "build/staging/bin/runvx:mivisionx runvx tool" \
             "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data" \
-            "${SYSDEPS}/libturbojpeg.so*:bundled turbojpeg" \
-            "${SYSDEPS}/libprotobuf.so*:bundled protobuf" \
-            "${SYSDEPS}/liblmdb.so*:bundled lmdb" \
-            "${SYSDEPS}/libsndfile.so*:bundled libsndfile"; do
+            "${SYSDEPS}/libturbojpeg-rocm-vision.so*:bundled turbojpeg" \
+            "${SYSDEPS}/libprotobuf-rocm-vision.so*:bundled protobuf" \
+            "${SYSDEPS}/liblmdb-rocm-vision.so*:bundled lmdb" \
+            "${SYSDEPS}/libsndfile-rocm-vision.so*:bundled libsndfile"; do
             PATH_CHECK="${CHECK%%:*}"
             LABEL="${CHECK##*:}"
             if ls ${PATH_CHECK} >/dev/null 2>&1; then
@@ -260,16 +270,56 @@ jobs:
           done
           echo "=== Staged bundled runtime deps ==="
           ls -la "${SYSDEPS}" 2>/dev/null || echo "(rocm_sysdeps/lib missing)"
-          # rocAL must link the shared protobuf (#10): librocal.so should list
-          # libprotobuf.so as a dynamic dependency, not statically embed it.
+          # rocAL must link the shared protobuf (#10) via the isolated SONAME
+          # (#4): librocal.so should list libprotobuf-rocm-vision.so as a
+          # dynamic dependency, not statically embed it or link the stock name.
           echo "=== librocal.so NEEDED protobuf? ==="
-          if readelf -d build/staging/lib/librocal.so 2>/dev/null \
-              | grep -i "NEEDED.*libprotobuf"; then
-            echo "  librocal links shared protobuf: OK"
+          NEEDED="$(readelf -d build/staging/lib/librocal.so 2>/dev/null | grep -i NEEDED)"
+          if echo "${NEEDED}" | grep -qi "libprotobuf-rocm-vision"; then
+            echo "  librocal links isolated shared protobuf: OK"
           else
-            echo "  ERROR: librocal.so does not list libprotobuf.so as NEEDED"
+            echo "  ERROR: librocal.so does not list libprotobuf-rocm-vision.so as NEEDED"
             FAIL=1
           fi
+          # SxS guarantee (#4): no stock bundled SONAME may remain NEEDED — a
+          # leftover stock name is exactly what a host copy could shadow.
+          echo "=== librocal.so free of stock bundled SONAMEs? ==="
+          if echo "${NEEDED}" \
+              | grep -Ei "lib(protobuf|protobuf-lite|turbojpeg|jpeg|lmdb|sndfile)\.so" \
+              | grep -qiv "rocm-vision"; then
+            echo "  ERROR: librocal.so still references a stock bundled SONAME:"
+            echo "${NEEDED}" | grep -Ei "lib(protobuf|protobuf-lite|turbojpeg|jpeg|lmdb|sndfile)\.so" \
+              | grep -iv "rocm-vision"
+            FAIL=1
+          else
+            echo "  no stock bundled SONAMEs referenced: OK"
+          fi
+          # SxS guarantee (#4): librocal.so must carry an RPATH to rocm_sysdeps.
+          # rocAL forces CMAKE_SKIP_INSTALL_RPATH, so rewrite_sonames.py re-adds
+          # it; without it the loader can't find the isolated *-rocm-vision deps
+          # even though they sit in rocm_sysdeps/lib (the clean-runner failure).
+          echo "=== librocal.so RPATH to rocm_sysdeps? ==="
+          RPATH="$(readelf -d build/staging/lib/librocal.so 2>/dev/null \
+            | grep -Ei 'R(UN)?PATH')"
+          echo "  ${RPATH:-<none>}"
+          if echo "${RPATH}" | grep -q 'rocm_sysdeps/lib'; then
+            echo "  librocal RPATH resolves bundled sysdeps: OK"
+          else
+            echo "  ERROR: librocal.so has no RPATH to rocm_sysdeps/lib"
+            FAIL=1
+          fi
+          # Each isolated SONAME must have its versioned loader symlink so the
+          # DT_NEEDED entry resolves (e.g. libprotobuf-rocm-vision.so.32).
+          echo "=== isolated SONAME symlinks resolve? ==="
+          for SO in $(readelf -d build/staging/lib/librocal.so 2>/dev/null \
+              | grep -i NEEDED | grep -oiE 'lib[a-z0-9._-]*-rocm-vision\.so[0-9.]*'); do
+            if [ -e "${SYSDEPS}/${SO}" ]; then
+              echo "  ${SO}: OK"
+            else
+              echo "  ERROR: NEEDED ${SO} has no file/symlink in rocm_sysdeps/lib"
+              FAIL=1
+            fi
+          done
           [ "${FAIL}" -eq 0 ] || { echo "Staged install verification failed"; exit 1; }
 
       - name: Collect build metadata
