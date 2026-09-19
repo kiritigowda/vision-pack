@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep GitHub Actions used in .github/workflows/ up to date.
+  # Scoped to Actions only on purpose: the git submodules are bumped by the
+  # nightly workflow (nightly.yml), so enabling the gitsubmodule ecosystem here
+  # would conflict with that automation.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
