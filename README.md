@@ -46,11 +46,13 @@ Build-time only (not shipped):
 ```
 vision-pack/
 ├── CMakeLists.txt                      top-level orchestrator
+├── CHANGELOG.md                        release history
 ├── cmake/
 │   ├── vision_pack_subproject.cmake    ExternalProject build orchestration
 │   └── vision_pack_bundled_dep.cmake   helper macros for bundled deps
 ├── build_tools/
-│   └── fetch_rocm_sdk.py               download Quartz nightly SDK tarball
+│   ├── fetch_rocm_sdk.py               download Quartz nightly SDK tarball
+│   └── rewrite_sonames.py              post-build SONAME isolation for bundled deps
 ├── packaging/
 │   ├── CMakeLists.txt                  CPack config (DEB/RPM/TGZ)
 │   └── meta/amdrocm-vision.control.in  meta-package template
@@ -194,6 +196,8 @@ directories — identical conventions to every other ROCm component.
 │   ├── rocpydecode.*.so, rocpyjpegdecode.*.so            rocPyDecode
 │   ├── cmake/
 │   │   └── roccv/                   cmake package config (rocCV)
+│   │   └── mivisionx/               FindMIVisionX.cmake shim
+│   │   └── rocal/                   Findrocal.cmake shim
 │   └── rocm_sysdeps/lib/            bundled runtime deps — same dir as
 │       ├── libturbojpeg.so*          ROCm's zlib, bzip2, liblzma, libdrm ...
 │       ├── libprotobuf.so*
@@ -215,6 +219,12 @@ directories — identical conventions to every other ROCm component.
 All vision `.so` files have `$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib` baked
 into their RPATH so bundled deps (and ROCm's existing sysdeps) are found at
 runtime without setting `LD_LIBRARY_PATH`.
+
+**Python path registration:** vision-pack ships an `amdrocm-vision-pythonpath`
+package that installs an `amdrocm-vision.pth` file, adding `/opt/rocm/lib` to
+Python's `sys.path`. This lets `import rocal`, `import rocpycv`, and
+`import rocpydecode` work without manual `PYTHONPATH` setup (system Python only;
+for venv/conda, copy the `.pth` to the environment's site-packages).
 
 ---
 
@@ -271,6 +281,7 @@ The `package.yml` CI workflow produces:
 | `amdrocm-roccv-devel` | headers, cmake config |
 | `amdrocm-rocpydecode` | rocpydecode + rocpyjpegdecode Python bindings |
 | `amdrocm-vision-sysdeps` | libturbojpeg, libprotobuf, liblmdb, libsndfile |
+| `amdrocm-vision-pythonpath` | `.pth` file for Python sys.path registration |
 | `amdrocm-vision` | meta — pulls in all runtime components |
 | `amdrocm-vision-sdk` | meta — runtime + all dev headers |
 | `amdrocm-vision-tests` | meta — sdk + all test suites |
@@ -283,17 +294,23 @@ The `package.yml` CI workflow produces:
   library, and the core rule that submodules are never patched.
 - [GOVERNANCE.md](GOVERNANCE.md) — maintainer and decision-making model.
 - [SECURITY.md](SECURITY.md) — how to report a vulnerability privately.
+- [CHANGELOG.md](CHANGELOG.md) — release history and known issues.
 
 ---
 
 ## Known issues
 
 - **MIVisionX cmake exports missing** — no `MIVisionXConfig.cmake` installed;
-  downstream consumers use `FindMIVisionX.cmake`.
+  downstream consumers use the provided `FindMIVisionX.cmake` shim.
   [MIVisionX#1761](https://github.com/ROCm/MIVisionX/issues/1761)
 
 - **rocAL cmake exports missing** — no `rocalConfig.cmake` installed.
   [rocAL#514](https://github.com/ROCm/rocAL/issues/514)
+
+- **rocPyDecode not enabled in CI** — rocPyDecode is explicitly disabled in CI
+  (`ENABLE_ROCPYDECODE=OFF`) pending upstream resolution of
+  [rocPyDecode#290](https://github.com/ROCm/rocPyDecode/issues/290)
+  (Python3_ROOT_DIR forwarding). See [#21](https://github.com/kiritigowda/vision-pack/issues/21).
 
 - **Python bindings in lib/ instead of site-packages** — rocAL, rocCV and
   rocPyDecode install `.so` extension modules to `/opt/rocm/lib`. vision-pack
@@ -318,6 +335,12 @@ The `package.yml` CI workflow produces:
 
 ---
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
+
+---
+
 ## Tested configuration
 
 | | |
@@ -332,3 +355,9 @@ The `package.yml` CI workflow produces:
 | rocAL | 2.5.0 |
 | rocCV | 0.4.0 |
 | rocPyDecode | 1.0.0 |
+
+---
+
+## License
+
+[MIT License](LICENSE) — Copyright (c) 2026 Kiriti Gowda
