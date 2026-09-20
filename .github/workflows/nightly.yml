@@ -44,7 +44,7 @@ jobs:
       sha: ${{ steps.commit.outputs.sha }}
       bumped: ${{ steps.commit.outputs.bumped }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
