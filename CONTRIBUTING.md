@@ -35,9 +35,24 @@ cmake --build build --parallel "$(nproc)"
 sudo cmake --install build            # installs into /opt/rocm
 ```
 
-Component flags: `-DVISION_PACK_ENABLE_{MIVISIONX,ROCAL,ROCCV,ROCPYDECODE}=OFF`.
-Bundling flags: `-DVISION_PACK_BUNDLE_{PYBIND11,DLPACK,RAPIDJSON,PROTOBUF,TURBOJPEG,LMDB,LIBSNDFILE}=OFF`
-to build against system deps. Disabling rocAL auto-disables its bundled runtime deps.
+### Build options
+
+Component flags (all ON by default):
+- `-DVISION_PACK_ENABLE_{MIVISIONX,ROCAL,ROCCV,ROCPYDECODE}=OFF` to disable individual libraries
+
+Bundling flags (all ON by default):
+- `-DVISION_PACK_BUNDLE_{PYBIND11,DLPACK,RAPIDJSON,PROTOBUF,TURBOJPEG,LMDB,LIBSNDFILE}=OFF` to build against system deps
+
+Disabling rocAL auto-disables its bundled runtime deps.
+
+### Using ccache (optional)
+
+For faster rebuilds, enable ccache:
+```bash
+cmake -B build -S . -DROCM_PATH=/opt/rocm \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache
+```
 
 ## Adding a bundled third-party dependency
 
@@ -50,12 +65,15 @@ to build against system deps. Disabling rocAL auto-disables its bundled runtime 
    `vision_pack_provide_*` macro rather than patching the submodule.
 4. If it ships a runtime `.so` that could collide with a host copy, add it to the SONAME
    isolation list in `build_tools/rewrite_sonames.py`.
+5. Update `CHANGELOG.md` under the `[Unreleased]` section.
 
 ## Adding a new vision library
 
-Declare it as a subproject via `vision_pack_subproject_declare()` in `CMakeLists.txt`,
-add its component install rules and CPack mapping in `packaging/CMakeLists.txt`, and (if it
-ships no package config) a `cmake/shims/Find<Name>.cmake` shim installed into `lib/cmake`.
+1. Declare it as a subproject via `vision_pack_subproject_declare()` in `CMakeLists.txt`.
+2. Add its component install rules and CPack mapping in `packaging/CMakeLists.txt`.
+3. If it ships no package config, add a `cmake/shims/Find<Name>.cmake` shim installed into `lib/cmake`.
+4. Update `README.md` with the new component in the build graph and package table.
+5. Update `CHANGELOG.md` under the `[Unreleased]` section.
 
 ## CI and reading failures
 
@@ -72,8 +90,19 @@ Three workflows run in `.github/workflows/`:
 When CI fails, open the failing job's log and look for the `ERROR:` lines emitted by the
 verification steps — they name the exact assertion that failed.
 
+## Release process
+
+1. Update `CHANGELOG.md`: move `[Unreleased]` items to a new version section.
+2. Update `CMakeLists.txt`: bump the project version.
+3. Create a git tag: `git tag -a vX.Y.Z -m "Release X.Y.Z"`
+4. Push the tag: `git push origin vX.Y.Z`
+5. GitHub Actions will create a release automatically from the tag.
+
 ## Pull requests
 
 - Keep the change focused; do not bundle unrelated cleanups.
 - Confirm it builds locally and does not touch any submodule directory.
+- Update `CHANGELOG.md` under `[Unreleased]` with a brief description of your change.
+- Update `README.md` if behavior or layout changed.
 - Make sure CI is green before requesting review.
+- Link any related issues in the PR description (e.g., `Closes #NN`).

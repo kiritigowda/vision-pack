@@ -20,7 +20,18 @@ Because vision-pack aggregates upstream ROCm libraries and third-party dependenc
 report may be forwarded to the relevant upstream project (e.g. MIVisionX, rocAL, protobuf)
 when the root cause lives there.
 
+## CVE scanning
+
+Bundled third-party dependencies (protobuf, libjpeg-turbo, lmdb, libsndfile) are
+scanned for known CVEs as part of the CI pipeline. See
+[#33](https://github.com/kiritigowda/vision-pack/issues/33) for progress on
+automated CVE scanning.
+
 ## Supported versions
 
 vision-pack is pre-release software; no released versions are formally supported yet. A
 supported-versions table will be added here once stable releases begin.
+
+| Version | Status | Notes |
+|---|---|---|
+| 0.1.0 | Pre-release | Initial release |
