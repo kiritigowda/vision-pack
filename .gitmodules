@@ -21,8 +21,8 @@
 	path = rocal
 	url = https://github.com/ROCm/rocAL.git
 	branch = develop
-[submodule "rocCV"]
-	path = rocCV
+[submodule "roccv"]
+	path = roccv
 	url = https://github.com/ROCm/rocCV.git
 	branch = develop
 [submodule "rocpydecode"]

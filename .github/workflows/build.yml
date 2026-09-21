@@ -20,7 +20,7 @@ on:
     paths:
       - 'mivisionx'
       - 'rocal'
-      - 'rocCV'
+      - 'roccv'
       - 'rocpydecode'
       - 'third-party/**'
       - 'cmake/**'
@@ -221,7 +221,7 @@ jobs:
           # never reached build/staging and CPack later failed on a missing
           # include/mivisionx. The per-project stage dirs already contain the
           # full include/ + lib/ + bin/ + share/ tree, so copying is faithful.
-          for proj in mivisionx rocCV rocal; do
+          for proj in mivisionx roccv rocal; do
             stage="build/_subprojects/${proj}/stage"
             echo "Staging ${proj} from ${stage}"
             cp -a "${stage}/." build/staging/
@@ -384,7 +384,7 @@ jobs:
       matrix:
         include:
           - lib: mivisionx
-          - lib: rocCV
+          - lib: roccv
           - lib: rocal
           # - lib: rocpydecode   # disabled for now
 
@@ -432,7 +432,7 @@ jobs:
         run: |
           cp -r staging/. "${ROCM_PATH}/"
           echo "Installed test sources:"
-          ls -d "${ROCM_PATH}"/share/${{ matrix.lib == 'rocCV' && 'roccv' || matrix.lib }}/test 2>/dev/null || true
+          ls -d "${ROCM_PATH}"/share/${{ matrix.lib }}/test 2>/dev/null || true
 
       # Build + run each library's installed test suite on this runner, exactly
       # as a target device would from the -test package. Tests are compiled here
@@ -457,7 +457,7 @@ jobs:
               TEST_SRC="${ROCM_PATH}/share/rocal/test"
               FILTER='-R _cpu$'
               EXTRA_CMAKE='' ;;
-            rocCV)
+            roccv)
               TEST_SRC="${ROCM_PATH}/share/roccv/test/cpp"
               FILTER=''
               # rocCV test exes use std::thread but link no pthread. On
