@@ -143,6 +143,11 @@ if(VISION_PACK_ENABLE_ROCAL)
     -DCMAKE_DISABLE_FIND_PACKAGE_LibTar=ON
     "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
+    # rocAL_pybind does find_package(Python3 COMPONENTS Interpreter Development),
+    # which needs libpython.so. manylinux's default static /opt/python lacks it,
+    # so forward the shared Python (same as rocCV/rocpydecode) or rocal_pybind is
+    # skipped even once pybind11 is found.
+    $<$<BOOL:${Python3_ROOT_DIR}>:-DPython3_ROOT_DIR=${Python3_ROOT_DIR}>
   )
 
   if(VISION_PACK_ENABLE_MIVISIONX)
@@ -204,6 +209,14 @@ if(VISION_PACK_ENABLE_ROCAL)
   set(_rocal_prefix_paths "")
   if(VISION_PACK_BUNDLE_TURBOJPEG OR VISION_PACK_BUNDLE_LMDB OR VISION_PACK_BUNDLE_LIBSNDFILE)
     list(APPEND _rocal_prefix_paths "${_bstage}")
+  endif()
+
+  # rocAL_pybind does find_package(pybind11 CONFIG); the bundled pybind11 installs
+  # its config package to VP_PYBIND11_STAGE (third-party/). Without this on the
+  # prefix path rocal_pybind is silently skipped and `import rocal_pybind` fails.
+  if(VISION_PACK_BUNDLE_PYBIND11)
+    list(APPEND _rocal_extra_deps pybind11_external)
+    list(APPEND _rocal_prefix_paths "${VP_PYBIND11_STAGE}")
   endif()
 
   vision_pack_subproject_declare(rocal

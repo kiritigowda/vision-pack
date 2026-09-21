@@ -272,6 +272,8 @@ jobs:
             "build/staging/lib/libopenvx.so:mivisionx libopenvx" \
             "build/staging/lib/librocal.so:rocAL librocal" \
             "build/staging/lib/libroccv.so:rocCV libroccv" \
+            "build/staging/lib/rocal_pybind*.so:rocAL Python binding" \
+            "build/staging/lib/rocpycv*.so:rocCV Python binding" \
             "build/staging/bin/runvx:mivisionx runvx tool" \
             "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data" \
             "${SYSDEPS}/libturbojpeg-rocm-vision.so*:bundled turbojpeg" \
@@ -570,8 +572,21 @@ jobs:
           try:
               importlib.import_module(mod)
               print(f"  import {mod}: OK")
+          except ModuleNotFoundError as e:
+              # The extension module isn't on sys.path at all — it was never
+              # built or never staged (NOT a linkage error; ModuleNotFoundError
+              # is a subclass of ImportError, so catch it first). This is the
+              # rocal_pybind-not-built failure mode: report it distinctly.
+              msg = (f"import {mod} not found on sys.path — the binding was not "
+                     f"built/staged: {e}")
+              if soft:
+                  print(f"  WARNING: {msg} (soft-fail — not failing the leg)")
+              else:
+                  print(f"  ERROR: {msg}")
+                  sys.exit(1)
           except ImportError as e:
-              # Unresolved symbol / missing .so at load time — a real linkage bug.
+              # Module file exists but failed to load — unresolved symbol / bad
+              # link / missing dependent .so. This is a real linkage bug.
               if soft:
                   print(f"  WARNING: import {mod} failed to link: {e} "
                         f"(soft-fail — not failing the leg)")

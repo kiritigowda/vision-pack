@@ -57,12 +57,35 @@ cmake_dependent_option(VISION_PACK_BUNDLE_LIBSNDFILE
   "Build libsndfile from bundled source"     ON "VISION_PACK_ENABLE_ROCAL" OFF)
 
 # ---------------------------------------------------------------------------
-# pybind11 v3.1.0  (build-time only — compiled into .so, not installed)
+# pybind11 v3.1.0  (build-time only — provides the CMake CONFIG package that
+# rocAL's rocAL_pybind needs via find_package(pybind11 CONFIG)).
+#
+# rocAL is a separate cmake invocation (ExternalProject), so a top-level
+# add_subdirectory(pybind11) is invisible to it — rocal_pybind then never builds
+# ("NOTE: rocAL pybind requires pybind11, Not Found"). Install pybind11's config
+# package into a dedicated build-tree stage dir and hand that to rocAL on its
+# CMAKE_PREFIX_PATH (see CMakeLists.txt). rocCV is unaffected — it FetchContent's
+# its own pybind11. The stage dir is NOT build/staging, so pybind11 headers never
+# reach the /opt/rocm artifact; this stays build-time only.
+# PYBIND11_NOPYTHON=ON lets pybind11 install its cmake tooling without resolving
+# an interpreter here — Python is detected in the rocAL sub-build at consume time.
 # ---------------------------------------------------------------------------
+set(VP_PYBIND11_STAGE "${CMAKE_BINARY_DIR}/third-party/pybind11-stage"
+    CACHE PATH "Build-tree prefix holding the bundled pybind11 CONFIG package")
 if(VISION_PACK_BUNDLE_PYBIND11)
-  set(PYBIND11_TEST OFF CACHE BOOL "" FORCE)
-  add_subdirectory(pybind11)
-  message(STATUS "[vision-pack] pybind11 v3.1.0 bundled (build-time only)")
+  ExternalProject_Add(pybind11_external
+    SOURCE_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/pybind11"
+    BINARY_DIR  "${CMAKE_BINARY_DIR}/third-party/pybind11-build"
+    INSTALL_DIR "${VP_PYBIND11_STAGE}"
+    CMAKE_ARGS
+      -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+      -DPYBIND11_TEST=OFF
+      -DPYBIND11_INSTALL=ON
+      -DPYBIND11_NOPYTHON=ON
+    BUILD_BYPRODUCTS
+      "${VP_PYBIND11_STAGE}/share/cmake/pybind11/pybind11Config.cmake"
+  )
+  message(STATUS "[vision-pack] pybind11 v3.1.0 (CONFIG package) → ${VP_PYBIND11_STAGE}")
 else()
   find_package(pybind11 REQUIRED)
 endif()
