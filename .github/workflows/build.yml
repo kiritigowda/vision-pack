@@ -254,6 +254,24 @@ jobs:
           # exists in the packaging project, so it silently matched nothing.
           cmake --install build --prefix build/staging --component runtime
 
+          # Prune build-time-only deps that the submodules' FetchContent installs
+          # leak into the staged tree. dlpack and pybind11 are build-time only —
+          # dlpack is used solely inside rocpycv.so / rocal_pybind.so, and no
+          # shipped package config references the dlpack cmake package (rocCV's
+          # roccvConfig only find_dependency(HIP)). So these are orphans in the
+          # artifact. Remove the headers + cmake configs; KEEP the third_party
+          # LICENSE texts under share/doc (legally required — the code is compiled
+          # into the shipped .so's).
+          echo "=== Pruning build-time-only dep leakage from staging ==="
+          for LEAK in \
+            "build/staging/include/dlpack" \
+            "build/staging/lib/cmake/dlpack"; do
+            if [ -e "${LEAK}" ]; then
+              echo "  removing ${LEAK}"
+              rm -rf "${LEAK}"
+            fi
+          done
+
       # Side-by-side isolation (#4): rename the bundled sysdeps
       # (protobuf/turbojpeg/lmdb/libsndfile) to private *-rocm-vision SONAMEs and
       # rewrite librocal.so's DT_NEEDED to match, so a host copy of any of these
@@ -287,6 +305,23 @@ jobs:
             else
               echo "  ERROR: ${LABEL} missing (${PATH_CHECK})"
               FAIL=1
+            fi
+          done
+          # Build-time-only deps must NOT ship in the artifact. dlpack is compiled
+          # into rocpycv.so/rocal_pybind.so; its headers + cmake config are pruned
+          # from staging. Assert they stay gone so a future submodule bump that
+          # re-leaks them is caught here, not by a downstream user.
+          echo "=== build-time-only deps absent from staging? ==="
+          for NEG in \
+            "build/staging/include/dlpack:dlpack headers" \
+            "build/staging/lib/cmake/dlpack:dlpack cmake config"; do
+            NEG_PATH="${NEG%%:*}"
+            NEG_LABEL="${NEG##*:}"
+            if [ -e "${NEG_PATH}" ]; then
+              echo "  ERROR: ${NEG_LABEL} leaked into staging (${NEG_PATH})"
+              FAIL=1
+            else
+              echo "  ${NEG_LABEL} absent: OK"
             fi
           done
           echo "=== Staged bundled runtime deps ==="
