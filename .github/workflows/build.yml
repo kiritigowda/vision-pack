@@ -199,14 +199,29 @@ jobs:
             -DVISION_PACK_ENABLE_MIVISIONX=ON \
             -DVISION_PACK_ENABLE_ROCAL=ON \
             -DVISION_PACK_ENABLE_ROCCV=ON \
-            -DVISION_PACK_ENABLE_ROCPYDECODE=OFF \
+            -DVISION_PACK_ENABLE_ROCPYDECODE=ON \
             -DVP_BUILD_PARALLEL_LEVEL="${VP_BUILD_PARALLEL}" \
             ${PYTHON_ARGS}
           # Log which Python was selected so sub-build failures are diagnosable
           cmake -B build -S . -N -L 2>/dev/null | grep -i "Python3_ROOT\|Python3_EXECUTABLE" || true
 
       - name: Build
-        run: cmake --build build --parallel "${VP_BUILD_PARALLEL}"
+        run: |
+          # Core libraries must build — a failure here is a real regression.
+          # (Building vp_rocal pulls in mivisionx + the bundled third-party deps
+          # via its dependency edges.)
+          cmake --build build --parallel "${VP_BUILD_PARALLEL}" \
+            --target vp_mivisionx vp_rocCV vp_rocal
+          # rocpydecode is newly enabled and upstream-blocked on rocPyDecode#290
+          # (Development.Embed / libpython on manylinux). Build it best-effort so
+          # a rocpydecode-only failure does not turn the whole build red — if it
+          # fails it simply produces no stage dir and is skipped downstream.
+          if cmake --build build --parallel "${VP_BUILD_PARALLEL}" \
+              --target vp_rocpydecode; then
+            echo "rocpydecode build: OK"
+          else
+            echo "::warning::rocpydecode build failed — continuing without it (upstream rocPyDecode#290); its stage dir will be absent and it is dropped from staging/packaging."
+          fi
 
       # Stage install — into build/staging/ (mirrors /opt/rocm layout).
       # Bundled sysdeps also land here via the install() rules in third-party/.
@@ -221,8 +236,12 @@ jobs:
           # never reached build/staging and CPack later failed on a missing
           # include/mivisionx. The per-project stage dirs already contain the
           # full include/ + lib/ + bin/ + share/ tree, so copying is faithful.
-          for proj in mivisionx rocCV rocal; do
+          for proj in mivisionx rocCV rocal rocpydecode; do
             stage="build/_subprojects/${proj}/stage"
+            if [ ! -d "${stage}" ]; then
+              echo "Skipping ${proj} — no stage dir (component disabled?)"
+              continue
+            fi
             echo "Staging ${proj} from ${stage}"
             cp -a "${stage}/." build/staging/
           done
@@ -308,6 +327,17 @@ jobs:
             echo "  ERROR: librocal.so has no RPATH to rocm_sysdeps/lib"
             FAIL=1
           fi
+          # librocal calls the raw libjpeg API (jpeg_std_error) but rocAL only
+          # links libturbojpeg, so rewrite_sonames.py adds the isolated libjpeg
+          # as an explicit NEEDED. Without it librocal.so fails to load (#39).
+          echo "=== librocal.so NEEDs isolated libjpeg? ==="
+          if echo "${NEEDED}" | grep -qi 'libjpeg-rocm-vision\.so'; then
+            echo "  librocal links isolated libjpeg: OK"
+          else
+            echo "  ERROR: librocal.so has no NEEDED on libjpeg-rocm-vision.so"
+            echo "         (raw libjpeg API jpeg_std_error would be unresolved)"
+            FAIL=1
+          fi
           # Each isolated SONAME must have its versioned loader symlink so the
           # DT_NEEDED entry resolves (e.g. libprotobuf-rocm-vision.so.32).
           echo "=== isolated SONAME symlinks resolve? ==="
@@ -332,10 +362,14 @@ jobs:
           ARTIFACT="vision-pack-staged-multiarch-${SHORT}"
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          # Manifest lives under share/vision-pack/ (a proper ROCm subdir), not
+          # the staging root — otherwise the dist tarball drops it straight into
+          # /opt/rocm/vision-pack-manifest.json (#37).
+          mkdir -p build/staging/share/vision-pack
           printf '{"version":"%s","sha":"%s","rocm_path":"%s","build_type":"%s","release_type":"%s"}\n' \
             "${VER}" "${SHA}" "${ROCM_PATH}" "${CMAKE_BUILD_TYPE}" \
             "${{ inputs.release_type || 'ci' }}" \
-            > build/staging/vision-pack-manifest.json
+            > build/staging/share/vision-pack/vision-pack-manifest.json
           echo "Version: ${VER}  Artifact: ${ARTIFACT}"
 
       - name: Upload staged artifacts
@@ -386,7 +420,7 @@ jobs:
           - lib: mivisionx
           - lib: rocCV
           - lib: rocal
-          # - lib: rocpydecode   # disabled for now
+          - lib: rocpydecode
 
     steps:
       - uses: actions/checkout@v7
@@ -464,7 +498,20 @@ jobs:
               # manylinux_2_28 (glibc 2.28) pthread_create/join live in
               # libpthread; glibc >= 2.34 folds them into libc. Add -pthread.
               EXTRA_CMAKE='-DCMAKE_EXE_LINKER_FLAGS=-pthread' ;;
+            rocpydecode)
+              # rocpydecode ships no installed share/<lib>/test tree (its only
+              # tests are source-tree configure regressions). Its runtime
+              # coverage here is the Python import smoke test below, so there is
+              # nothing to build/ctest — skip cleanly.
+              TEST_SRC=''
+              FILTER=''
+              EXTRA_CMAKE='' ;;
           esac
+
+          if [ -z "${TEST_SRC}" ] || [ ! -d "${TEST_SRC}" ]; then
+            echo "${{ matrix.lib }}: no installed test sources — skipping ctest"
+            exit 0
+          fi
 
           echo "=== Configuring installed test sources at ${TEST_SRC} ==="
           cmake -B test-build -S "${TEST_SRC}" \
@@ -491,6 +538,54 @@ jobs:
             --test-output-size-passed 1024 \
             --test-output-size-failed 102400 \
             -T Test
+
+      # Python import smoke test (#22). CTest can pass while the pybind module
+      # is broken (unresolved symbol from a bad link surfaces only at import).
+      # A linkage failure (ImportError / undefined symbol) is a real bug and
+      # fails the leg; a GPU-runtime failure (no device on this CPU runner) is
+      # tolerated. rocpydecode is newly enabled and upstream-blocked on
+      # rocPyDecode#290 (Development.Embed on manylinux), so its import runs in
+      # SOFT_FAIL mode — a failure is a warning, not a red leg.
+      - name: Python import smoke test — ${{ matrix.lib }}
+        if: matrix.lib == 'rocal' || matrix.lib == 'rocCV' || matrix.lib == 'rocpydecode'
+        env:
+          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
+          LD_LIBRARY_PATH: >-
+            ${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib:${{ env.ROCM_PATH }}/lib/rocm_sysdeps/lib
+          PYTHONPATH: ${{ env.ROCM_PATH }}/lib
+          HIP_PLATFORM: amd
+        run: |
+          case "${{ matrix.lib }}" in
+            rocal)        MODULES="rocal_pybind"; SOFT_FAIL=0 ;;
+            rocCV)        MODULES="rocpycv";      SOFT_FAIL=0 ;;
+            # Warn-only: don't fail the leg on a rocpydecode import problem.
+            rocpydecode)  MODULES="rocpydecode rocpyjpegdecode"; SOFT_FAIL=1 ;;
+          esac
+          for MOD in ${MODULES}; do
+            echo "=== import ${MOD} ==="
+            SOFT_FAIL="${SOFT_FAIL}" python3 - "${MOD}" <<'PY'
+          import importlib, os, sys
+          mod = sys.argv[1]
+          soft = os.environ.get("SOFT_FAIL") == "1"
+          try:
+              importlib.import_module(mod)
+              print(f"  import {mod}: OK")
+          except ImportError as e:
+              # Unresolved symbol / missing .so at load time — a real linkage bug.
+              if soft:
+                  print(f"  WARNING: import {mod} failed to link: {e} "
+                        f"(soft-fail — not failing the leg)")
+              else:
+                  print(f"  ERROR: import {mod} failed to link: {e}")
+                  sys.exit(1)
+          except Exception as e:
+              # Module linked and initialised far enough to raise a non-link
+              # error (e.g. no GPU on this CPU runner). Tolerate — the binding
+              # itself loaded, which is what this smoke test proves.
+              print(f"  import {mod} linked; runtime init raised "
+                    f"{type(e).__name__}: {e} (tolerated on CPU runner)")
+          PY
+          done
 
       - name: Upload CTest results
         if: always()

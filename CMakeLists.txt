@@ -135,6 +135,12 @@ if(VISION_PACK_ENABLE_ROCAL)
     -DBUILD_PYPACKAGE=ON
     -DBUILD_WITH_FFMPEG=OFF
     -DBUILD_WITH_OPENCV=OFF
+    # WebDataset reader is disabled by design (keeps the tree self-contained).
+    # rocAL enables it opportunistically via find_package(LibTar QUIET), so a
+    # stray host libtar-dev would silently link an untracked runtime dep and
+    # flip on -DENABLE_WDS. Force the find to a no-op so the outcome is
+    # deterministic regardless of the build host (#38).
+    -DCMAKE_DISABLE_FIND_PACKAGE_LibTar=ON
     "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
   )
@@ -190,11 +196,22 @@ if(VISION_PACK_ENABLE_ROCAL)
     list(APPEND _rocal_cmake_args "-DSndFile_ROOT=${_bstage}")
   endif()
 
+  # Put the bundled sysdeps stage on rocAL's CMAKE_PREFIX_PATH so its
+  # FindTurboJpeg/FindLMDB/FindSndFile modules resolve the vendored copies
+  # ahead of any host devel package in /usr/lib (#38). The cache-var hints
+  # (TURBO_JPEG_PATH/LMDB_DIR/SndFile_ROOT) only feed those finders' low-
+  # priority PATHS slot, which loses to the system prefix; the prefix path wins.
+  set(_rocal_prefix_paths "")
+  if(VISION_PACK_BUNDLE_TURBOJPEG OR VISION_PACK_BUNDLE_LMDB OR VISION_PACK_BUNDLE_LIBSNDFILE)
+    list(APPEND _rocal_prefix_paths "${_bstage}")
+  endif()
+
   vision_pack_subproject_declare(rocal
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocal"
-    DEPS       ${_rocal_deps}
-    EXTRA_DEPS ${_rocal_extra_deps}
-    CMAKE_ARGS ${_rocal_cmake_args}
+    SOURCE_DIR   "${CMAKE_CURRENT_SOURCE_DIR}/rocal"
+    DEPS         ${_rocal_deps}
+    EXTRA_DEPS   ${_rocal_extra_deps}
+    CMAKE_ARGS   ${_rocal_cmake_args}
+    PREFIX_PATHS ${_rocal_prefix_paths}
   )
 endif()
 

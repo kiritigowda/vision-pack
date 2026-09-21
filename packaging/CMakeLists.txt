@@ -187,7 +187,9 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/roccv/test"
 # (rocPyDecode#285), so we can't rely on component-filtered installs. Instead we
 # split by PATH here at the packaging layer: runtime .so's → rocpydecode, and
 # share/rocpydecode/tests → rocpydecode-test (below). No submodule patch needed.
-# NOTE: not CI-verified yet — rocpydecode is currently ENABLE_ROCPYDECODE=OFF.
+# rocpydecode is built best-effort in CI (upstream-blocked on rocPyDecode#290);
+# if its build is skipped these globs match nothing and the component packages
+# empty rather than failing.
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/"
     DESTINATION lib COMPONENT rocpydecode
     FILES_MATCHING

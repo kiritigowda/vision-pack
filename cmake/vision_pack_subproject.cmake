@@ -60,7 +60,7 @@ function(vision_pack_subproject_declare name)
   cmake_parse_arguments(PARSE_ARGV 1 ARG
     ""
     "SOURCE_DIR;ENABLED_BY"
-    "DEPS;EXTRA_DEPS;CMAKE_ARGS")
+    "DEPS;EXTRA_DEPS;CMAKE_ARGS;PREFIX_PATHS")
 
   # Check optional enable guard
   if(ARG_ENABLED_BY)
@@ -88,6 +88,7 @@ function(vision_pack_subproject_declare name)
   set_property(GLOBAL PROPERTY _VP_${name}_DEPS        "${ARG_DEPS}")
   set_property(GLOBAL PROPERTY _VP_${name}_EXTRA_DEPS  "${ARG_EXTRA_DEPS}")
   set_property(GLOBAL PROPERTY _VP_${name}_CMAKE_ARGS  "${ARG_CMAKE_ARGS}")
+  set_property(GLOBAL PROPERTY _VP_${name}_PREFIX_PATHS "${ARG_PREFIX_PATHS}")
 
   # Register in global list
   set_property(GLOBAL APPEND PROPERTY _VISION_PACK_SUBPROJECTS "${name}")
@@ -125,6 +126,7 @@ function(vision_pack_subproject_activate)
     get_property(_deps       GLOBAL PROPERTY _VP_${_name}_DEPS)
     get_property(_extra_deps GLOBAL PROPERTY _VP_${_name}_EXTRA_DEPS)
     get_property(_cmake_args GLOBAL PROPERTY _VP_${_name}_CMAKE_ARGS)
+    get_property(_prefix_paths GLOBAL PROPERTY _VP_${_name}_PREFIX_PATHS)
 
     # Resolve dep ExternalProject target names (vp_<name>) for DEPENDS
     set(_ep_dep_targets)
@@ -135,10 +137,16 @@ function(vision_pack_subproject_activate)
     # Resolve dep stage dirs → CMAKE_PREFIX_PATH for this project
     _vp_deps_to_prefix_path(_dep_prefix_paths ${_deps})
 
-    # Build the prefix path string: dep stages + ROCM_PATH.
+    # Build the prefix path string. Bundled-dep stages go FIRST so a sub-build's
+    # find_package/find_library resolves the vendored copy before any system
+    # copy in /usr/lib — CMAKE_PREFIX_PATH is searched ahead of the system
+    # prefixes, and covers both lib/ and lib64/. Without this a host
+    # libturbojpeg/lmdb/sndfile devel package shadows the bundled one and the
+    # SONAME-rewrite verification later fails (#38). Then dep stages + ROCM_PATH.
     # The dcgpu-tests SDK tarball carries rpp/rocdecode/rocjpeg directly under
     # ROCM_PATH, so no core-X.Y overlay handling is needed.
-    set(_prefix_path_list "${_dep_prefix_paths}")
+    set(_prefix_path_list "${_prefix_paths}")
+    list(APPEND _prefix_path_list "${_dep_prefix_paths}")
     list(APPEND _prefix_path_list "${ROCM_PATH}")
     # Also honour CMAKE_PREFIX_PATH set by the parent (e.g. from CI)
     if(CMAKE_PREFIX_PATH)

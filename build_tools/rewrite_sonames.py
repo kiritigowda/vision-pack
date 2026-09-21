@@ -163,10 +163,39 @@ def _current_rpath(path):
     ).stdout.strip()
 
 
-def patch_consumers(root, soname_map):
+def _soname_of(path):
+    """DT_SONAME of an ELF file, or its basename if it carries none."""
+    out = subprocess.run(
+        ["patchelf", "--print-soname", str(path)],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return out or path.name
+
+
+def isolated_soname(sysdeps_dir, stem):
+    """SONAME of the renamed bundled lib<stem>-rocm-vision.so* (None if absent)."""
+    isolated_stem = f"{stem}{SUFFIX}"
+    candidates = sorted(
+        p for p in sysdeps_dir.glob(f"lib{isolated_stem}.so*")
+        if p.is_file() and not p.is_symlink()
+    )
+    if not candidates:
+        return None
+    return _soname_of(candidates[0])
+
+
+def patch_consumers(root, sysdeps_dir, soname_map):
     consumers = []
     for pattern in CONSUMER_GLOBS:
         consumers.extend(sorted(root.glob(pattern)))
+    # rocAL's libjpeg decoder (rocAL/source/decoders/libjpeg/libjpeg_extra.cpp)
+    # calls the raw libjpeg API (jpeg_std_error, jpeg_read_header, ...), but
+    # rocAL's FindTurboJpeg.cmake links only libturbojpeg — which does NOT export
+    # those symbols — so librocal.so ships with an unresolved jpeg_std_error and
+    # fails to load (#39). Both libs come from the one bundled libjpeg-turbo
+    # build and both are staged in rocm_sysdeps, so add the isolated libjpeg as
+    # an explicit NEEDED. Post-build, no submodule edit.
+    jpeg_soname = isolated_soname(sysdeps_dir, "jpeg")
     for consumer in consumers:
         if consumer.is_symlink() or not consumer.is_file():
             continue
@@ -178,6 +207,9 @@ def patch_consumers(root, soname_map):
             if old_soname in needed:
                 _run(["patchelf", "--replace-needed", old_soname, new_soname, str(consumer)])
                 print(f"  {consumer.name}: NEEDED {old_soname} -> {new_soname}")
+        if jpeg_soname and jpeg_soname not in needed:
+            _run(["patchelf", "--add-needed", jpeg_soname, str(consumer)])
+            print(f"  {consumer.name}: +NEEDED {jpeg_soname} (raw libjpeg API)")
         # rocAL strips its install RPATH (CMAKE_SKIP_INSTALL_RPATH), so
         # re-add the one that locates the bundled sysdeps at runtime.
         rpath_parts = [p for p in _current_rpath(consumer).split(":") if p]
@@ -231,7 +263,7 @@ def main():
         print("[rewrite_sonames] no stock-named bundled sysdeps found "
               "(already rewritten or none bundled)")
     print("[rewrite_sonames] patching consumers")
-    patch_consumers(root, soname_map)
+    patch_consumers(root, sysdeps_dir, soname_map)
 
     if not verify(root):
         return 1

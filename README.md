@@ -288,12 +288,8 @@ The `package.yml` CI workflow produces:
 
 ---
 
-## Contributing & governance
+## Release history
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — how to build, add a bundled dep or vision
-  library, and the core rule that submodules are never patched.
-- [GOVERNANCE.md](GOVERNANCE.md) — maintainer and decision-making model.
-- [SECURITY.md](SECURITY.md) — how to report a vulnerability privately.
 - [CHANGELOG.md](CHANGELOG.md) — release history and known issues.
 
 ---
