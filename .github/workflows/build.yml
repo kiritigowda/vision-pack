@@ -225,7 +225,7 @@ jobs:
           # (Building vp_rocal pulls in mivisionx + the bundled third-party deps
           # via its dependency edges.)
           cmake --build build --parallel "${VP_BUILD_PARALLEL}" \
-            --target vp_mivisionx vp_rocCV vp_rocal
+            --target vp_mivisionx vp_roccv vp_rocal
           # rocpydecode is newly enabled and upstream-blocked on rocPyDecode#290
           # (Development.Embed / libpython on manylinux). Build it best-effort so
           # a rocpydecode-only failure does not turn the whole build red — if it
@@ -250,7 +250,7 @@ jobs:
           # never reached build/staging and CPack later failed on a missing
           # include/mivisionx. The per-project stage dirs already contain the
           # full include/ + lib/ + bin/ + share/ tree, so copying is faithful.
-          for proj in mivisionx rocCV rocal rocpydecode; do
+          for proj in mivisionx roccv rocal rocpydecode; do
             stage="build/_subprojects/${proj}/stage"
             if [ ! -d "${stage}" ]; then
               echo "Skipping ${proj} — no stage dir (component disabled?)"
@@ -582,7 +582,7 @@ jobs:
       # rocPyDecode#290 (Development.Embed on manylinux), so its import runs in
       # SOFT_FAIL mode — a failure is a warning, not a red leg.
       - name: Python import smoke test — ${{ matrix.lib }}
-        if: matrix.lib == 'rocal' || matrix.lib == 'rocCV' || matrix.lib == 'rocpydecode'
+        if: matrix.lib == 'rocal' || matrix.lib == 'roccv' || matrix.lib == 'rocpydecode'
         env:
           PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
           LD_LIBRARY_PATH: >-
@@ -592,7 +592,7 @@ jobs:
         run: |
           case "${{ matrix.lib }}" in
             rocal)        MODULES="rocal_pybind"; SOFT_FAIL=0 ;;
-            rocCV)        MODULES="rocpycv";      SOFT_FAIL=0 ;;
+            roccv)        MODULES="rocpycv";      SOFT_FAIL=0 ;;
             # Warn-only: don't fail the leg on a rocpydecode import problem.
             rocpydecode)  MODULES="rocpydecode rocpyjpegdecode"; SOFT_FAIL=1 ;;
           esac
