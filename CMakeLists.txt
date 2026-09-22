@@ -222,6 +222,17 @@ if(VISION_PACK_ENABLE_ROCAL)
     list(APPEND _rocal_cmake_args "-DSndFile_ROOT=${_bstage}")
   endif()
 
+  # rocAL_pybind's find_package(DLPACK QUIET) uses rocAL's own FindDLPACK.cmake,
+  # which searches ${DLPACK_DIR}/include for dlpack/dlpack.h — it does NOT honour
+  # the dlpack_ROOT that vision_pack_provide_header_only sets. Without this hint
+  # DLPack is silently not found and the binding is built with ENABLE_DLPACK=0
+  # (no TF/Generic-plugin GPU tensor interop). Point DLPACK_DIR at the bundled
+  # header tree (header-only, compiled in — nothing installed).
+  if(VISION_PACK_BUNDLE_DLPACK)
+    list(APPEND _rocal_cmake_args
+      "-DDLPACK_DIR=${CMAKE_CURRENT_SOURCE_DIR}/third-party/dlpack")
+  endif()
+
   # Put the bundled sysdeps stage on rocAL's CMAKE_PREFIX_PATH so its
   # FindTurboJpeg/FindLMDB/FindSndFile modules resolve the vendored copies
   # ahead of any host devel package in /usr/lib (#38). The cache-var hints
