@@ -93,7 +93,7 @@ jobs:
           find staging/ -name "*.so*" | sort | head -30
           echo ""
           echo "=== Manifest ==="
-          cat staging/vision-pack-manifest.json 2>/dev/null \
+          cat staging/share/vision-pack/vision-pack-manifest.json 2>/dev/null \
             | python3 -m json.tool || echo "(no manifest)"
 
       - name: Determine package version
@@ -103,7 +103,7 @@ jobs:
             VER="${{ inputs.package_version }}"
           else
             VER=$(git describe --tags --abbrev=0 2>/dev/null \
-              || jq -r '.version // empty' staging/vision-pack-manifest.json 2>/dev/null \
+              || jq -r '.version // empty' staging/share/vision-pack/vision-pack-manifest.json 2>/dev/null \
               || echo "0.1.0")
             VER="${VER#v}"
           fi
@@ -347,6 +347,23 @@ jobs:
           fi
           if ! echo "${NEEDED}" | grep -qi "libprotobuf-rocm-vision"; then
             echo "ERROR: librocal.so missing isolated protobuf NEEDED"; FAIL=1
+          fi
+          # #39: librocal uses the raw libjpeg API (jpeg_std_error) but rocAL only
+          # links libturbojpeg. Assert librocal NEEDs the isolated libjpeg AND
+          # that libjpeg actually exports jpeg_std_error, so the symbol resolves
+          # at load time. A full dlopen isn't possible here (external hip/rpp
+          # deps absent), so this symbol-level check is the clean-runner ceiling.
+          if ! echo "${NEEDED}" | grep -qi "libjpeg-rocm-vision"; then
+            echo "ERROR: librocal.so missing isolated libjpeg NEEDED (#39)"; FAIL=1
+          fi
+          JPEGLIB="$(find /opt/rocm/lib/rocm_sysdeps/lib -name 'libjpeg-rocm-vision.so*' \
+            -type f | head -1)"
+          if [ -z "${JPEGLIB}" ]; then
+            echo "ERROR: isolated libjpeg not shipped in rocm_sysdeps (#39)"; FAIL=1
+          elif ! readelf -sW "${JPEGLIB}" | grep -q ' jpeg_std_error$'; then
+            echo "ERROR: ${JPEGLIB} does not export jpeg_std_error (#39)"; FAIL=1
+          else
+            echo "isolated libjpeg exports jpeg_std_error: OK"
           fi
           [ "${FAIL}" -eq 0 ] || exit 1
           echo "librocal.so bundled deps are all isolated: OK"

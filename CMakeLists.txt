@@ -129,14 +129,46 @@ if(VISION_PACK_ENABLE_ROCAL)
   # Bundled sysdeps staging dir (set by third-party/CMakeLists.txt)
   set(_bstage "${VP_BUNDLED_DEPS_STAGE}")
 
+  # Pin the exact Python for rocAL_pybind. Unlike rocCV/rocpydecode (which honour
+  # Python3_ROOT_DIR for a single find), rocAL_pybind loops PYTHON_VERSIONS
+  # 3.13..3.8 and builds a binding for EVERY interpreter it finds — so it also
+  # picks up manylinux's static /opt/python/cp38 and compiles it against the
+  # bundled pybind11 3.1.0, which needs Python >= 3.9 (cp38 build fails with
+  # undeclared PyObject_Vectorcall / PyThreadState_GetFrame). PYTHON_VERSION_
+  # SUGGESTED collapses that loop to one version. Derive major.minor from the
+  # forwarded shared interpreter so it tracks Python3_ROOT_DIR, no hardcoding.
+  set(_rocal_py_suggested "")
+  if(Python3_ROOT_DIR AND EXISTS "${Python3_ROOT_DIR}/bin/python3")
+    execute_process(
+      COMMAND "${Python3_ROOT_DIR}/bin/python3" -c
+              "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+      OUTPUT_VARIABLE _rocal_py_suggested
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  endif()
+
   set(_rocal_cmake_args
     -DBACKEND=HIP
     -DGPU_SUPPORT=ON
     -DBUILD_PYPACKAGE=ON
-    -DBUILD_WITH_FFMPEG=OFF
-    -DBUILD_WITH_OPENCV=OFF
+    # ffmpeg (video reader) and WebDataset (libtar) are disabled by design to
+    # keep the tree self-contained. rocAL has no BUILD_WITH_* switches for these;
+    # it enables each opportunistically via find_package(<Pkg> QUIET). So a stray
+    # host ffmpeg/libtar-dev would silently link an untracked runtime dep (and
+    # libtar flips on -DENABLE_WDS). Disable the finds so the outcome is
+    # deterministic regardless of the build host (#38). OpenCV needs no flag —
+    # current rocAL never looks for it.
+    -DCMAKE_DISABLE_FIND_PACKAGE_FFmpeg=ON
+    -DCMAKE_DISABLE_FIND_PACKAGE_LibTar=ON
     "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
+    # rocAL_pybind does find_package(Python3 COMPONENTS Interpreter Development),
+    # which needs libpython.so. manylinux's default static /opt/python lacks it,
+    # so forward the shared Python (same as rocCV/rocpydecode) or rocal_pybind is
+    # skipped even once pybind11 is found.
+    $<$<BOOL:${Python3_ROOT_DIR}>:-DPython3_ROOT_DIR=${Python3_ROOT_DIR}>
+    # Build ONE binding, for the forwarded interpreter, not the 3.13..3.8 sweep.
+    $<$<BOOL:${_rocal_py_suggested}>:-DPYTHON_VERSION_SUGGESTED=${_rocal_py_suggested}>
   )
 
   if(VISION_PACK_ENABLE_MIVISIONX)
@@ -190,11 +222,41 @@ if(VISION_PACK_ENABLE_ROCAL)
     list(APPEND _rocal_cmake_args "-DSndFile_ROOT=${_bstage}")
   endif()
 
+  # rocAL_pybind's find_package(DLPACK QUIET) uses rocAL's own FindDLPACK.cmake,
+  # which searches ${DLPACK_DIR}/include for dlpack/dlpack.h — it does NOT honour
+  # the dlpack_ROOT that vision_pack_provide_header_only sets. Without this hint
+  # DLPack is silently not found and the binding is built with ENABLE_DLPACK=0
+  # (no TF/Generic-plugin GPU tensor interop). Point DLPACK_DIR at the bundled
+  # header tree (header-only, compiled in — nothing installed).
+  if(VISION_PACK_BUNDLE_DLPACK)
+    list(APPEND _rocal_cmake_args
+      "-DDLPACK_DIR=${CMAKE_CURRENT_SOURCE_DIR}/third-party/dlpack")
+  endif()
+
+  # Put the bundled sysdeps stage on rocAL's CMAKE_PREFIX_PATH so its
+  # FindTurboJpeg/FindLMDB/FindSndFile modules resolve the vendored copies
+  # ahead of any host devel package in /usr/lib (#38). The cache-var hints
+  # (TURBO_JPEG_PATH/LMDB_DIR/SndFile_ROOT) only feed those finders' low-
+  # priority PATHS slot, which loses to the system prefix; the prefix path wins.
+  set(_rocal_prefix_paths "")
+  if(VISION_PACK_BUNDLE_TURBOJPEG OR VISION_PACK_BUNDLE_LMDB OR VISION_PACK_BUNDLE_LIBSNDFILE)
+    list(APPEND _rocal_prefix_paths "${_bstage}")
+  endif()
+
+  # rocAL_pybind does find_package(pybind11 CONFIG); the bundled pybind11 installs
+  # its config package to VP_PYBIND11_STAGE (third-party/). Without this on the
+  # prefix path rocal_pybind is silently skipped and `import rocal_pybind` fails.
+  if(VISION_PACK_BUNDLE_PYBIND11)
+    list(APPEND _rocal_extra_deps pybind11_external)
+    list(APPEND _rocal_prefix_paths "${VP_PYBIND11_STAGE}")
+  endif()
+
   vision_pack_subproject_declare(rocal
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocal"
-    DEPS       ${_rocal_deps}
-    EXTRA_DEPS ${_rocal_extra_deps}
-    CMAKE_ARGS ${_rocal_cmake_args}
+    SOURCE_DIR   "${CMAKE_CURRENT_SOURCE_DIR}/rocal"
+    DEPS         ${_rocal_deps}
+    EXTRA_DEPS   ${_rocal_extra_deps}
+    CMAKE_ARGS   ${_rocal_cmake_args}
+    PREFIX_PATHS ${_rocal_prefix_paths}
   )
 endif()
 

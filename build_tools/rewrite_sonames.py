@@ -14,8 +14,12 @@ does the same with patchelf as a post-build pass over the staged install tree.
 Renaming scheme (major-version suffix preserved):
     libprotobuf.so.32  ->  libprotobuf-rocm-vision.so.32
 
-Only librocal.so links these deps (mivisionx/rocCV/rocpydecode carry no
-DT_NEEDED on them), so the consumer patch surface is just librocal.so*.
+librocal.so and rocal_pybind.so link these deps directly (mivisionx/rocCV/
+rocpydecode carry no DT_NEEDED on them), so the consumer patch surface is
+librocal.so* plus rocal_pybind*.so. rocal_pybind links libturbojpeg via
+${TurboJpeg_LIBRARIES} (rocAL_pybind/CMakeLists.txt), so it too references the
+stock libturbojpeg.so.0 and must be rewritten, or its import dlopen fails with
+"libturbojpeg.so.0: cannot open shared object file".
 
 Usage:
     python3 build_tools/rewrite_sonames.py <staging-root>
@@ -48,16 +52,26 @@ SYSDEP_STEMS = [
 SUFFIX = "-rocm-vision"
 
 # Consumers (relative to staging root) that may carry a DT_NEEDED on the
-# bundled sysdeps and must have those references rewritten.
-CONSUMER_GLOBS = ["lib/librocal.so", "lib/librocal.so.*"]
+# bundled sysdeps and must have those references rewritten. rocal_pybind.so
+# links ${TurboJpeg_LIBRARIES} directly (rocAL_pybind/CMakeLists.txt), so it
+# references the stock libturbojpeg.so.0 just like librocal.so and must be
+# rewritten too — otherwise `import rocal_pybind` fails to dlopen the renamed
+# bundled turbojpeg.
+CONSUMER_GLOBS = [
+    "lib/librocal.so",
+    "lib/librocal.so.*",
+    "lib/rocal_pybind*.so",
+]
 
-# RPATH every consumer must carry so the loader finds the bundled sysdeps
-# in rocm_sysdeps/lib at runtime. Matches VP_INSTALL_RPATH in CMakeLists.txt.
-# rocAL forces CMAKE_SKIP_INSTALL_RPATH (rocAL CMakeLists.txt), stripping the
-# RPATH our ExternalProject passes via -DCMAKE_INSTALL_RPATH, so librocal.so
-# ships with no RPATH and cannot locate the renamed *-rocm-vision deps. We
-# re-add it here (post-build, no submodule edit).
-CONSUMER_RPATH = "$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib"
+# RPATH entries every consumer must carry so the loader finds the bundled
+# sysdeps in rocm_sysdeps/lib at runtime. Matches VP_INSTALL_RPATH in
+# CMakeLists.txt. rocAL forces CMAKE_SKIP_INSTALL_RPATH (rocAL CMakeLists.txt),
+# stripping the RPATH our ExternalProject passes via -DCMAKE_INSTALL_RPATH, so
+# librocal.so ships with no RPATH and cannot locate the renamed *-rocm-vision
+# deps. We re-add it here (post-build, no submodule edit). rocal_pybind.so DOES
+# ship an RPATH ($ORIGIN:$ORIGIN/llvm/lib for OpenMP/llvm), so we append the
+# missing sysdeps entry rather than overwrite what it already has.
+REQUIRED_RPATH_ENTRIES = ["$ORIGIN", "$ORIGIN/../lib/rocm_sysdeps/lib"]
 
 # Matches libNAME.so, libNAME.so.MAJOR, libNAME.so.MAJOR.MINOR.PATCH
 _SO_RE = re.compile(r"^lib(?P<stem>.+?)\.so(?P<ver>(?:\.\d+)*)$")
@@ -163,10 +177,39 @@ def _current_rpath(path):
     ).stdout.strip()
 
 
-def patch_consumers(root, soname_map):
+def _soname_of(path):
+    """DT_SONAME of an ELF file, or its basename if it carries none."""
+    out = subprocess.run(
+        ["patchelf", "--print-soname", str(path)],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return out or path.name
+
+
+def isolated_soname(sysdeps_dir, stem):
+    """SONAME of the renamed bundled lib<stem>-rocm-vision.so* (None if absent)."""
+    isolated_stem = f"{stem}{SUFFIX}"
+    candidates = sorted(
+        p for p in sysdeps_dir.glob(f"lib{isolated_stem}.so*")
+        if p.is_file() and not p.is_symlink()
+    )
+    if not candidates:
+        return None
+    return _soname_of(candidates[0])
+
+
+def patch_consumers(root, sysdeps_dir, soname_map):
     consumers = []
     for pattern in CONSUMER_GLOBS:
         consumers.extend(sorted(root.glob(pattern)))
+    # rocAL's libjpeg decoder (rocAL/source/decoders/libjpeg/libjpeg_extra.cpp)
+    # calls the raw libjpeg API (jpeg_std_error, jpeg_read_header, ...), but
+    # rocAL's FindTurboJpeg.cmake links only libturbojpeg — which does NOT export
+    # those symbols — so librocal.so ships with an unresolved jpeg_std_error and
+    # fails to load (#39). Both libs come from the one bundled libjpeg-turbo
+    # build and both are staged in rocm_sysdeps, so add the isolated libjpeg as
+    # an explicit NEEDED. Post-build, no submodule edit.
+    jpeg_soname = isolated_soname(sysdeps_dir, "jpeg")
     for consumer in consumers:
         if consumer.is_symlink() or not consumer.is_file():
             continue
@@ -178,12 +221,19 @@ def patch_consumers(root, soname_map):
             if old_soname in needed:
                 _run(["patchelf", "--replace-needed", old_soname, new_soname, str(consumer)])
                 print(f"  {consumer.name}: NEEDED {old_soname} -> {new_soname}")
-        # rocAL strips its install RPATH (CMAKE_SKIP_INSTALL_RPATH), so
-        # re-add the one that locates the bundled sysdeps at runtime.
+        if jpeg_soname and jpeg_soname not in needed:
+            _run(["patchelf", "--add-needed", jpeg_soname, str(consumer)])
+            print(f"  {consumer.name}: +NEEDED {jpeg_soname} (raw libjpeg API)")
+        # rocAL strips librocal.so's install RPATH (CMAKE_SKIP_INSTALL_RPATH),
+        # so re-add the entries that locate the bundled sysdeps at runtime.
+        # rocal_pybind.so keeps its own RPATH ($ORIGIN/llvm/lib for OpenMP), so
+        # merge in only the missing entries rather than clobber it.
         rpath_parts = [p for p in _current_rpath(consumer).split(":") if p]
-        if "$ORIGIN/../lib/rocm_sysdeps/lib" not in rpath_parts:
-            _run(["patchelf", "--set-rpath", CONSUMER_RPATH, str(consumer)])
-            print(f"  {consumer.name}: RPATH -> {CONSUMER_RPATH}")
+        missing = [e for e in REQUIRED_RPATH_ENTRIES if e not in rpath_parts]
+        if missing:
+            new_rpath = ":".join(rpath_parts + missing)
+            _run(["patchelf", "--set-rpath", new_rpath, str(consumer)])
+            print(f"  {consumer.name}: RPATH -> {new_rpath}")
 
 
 def verify(root):
@@ -231,7 +281,7 @@ def main():
         print("[rewrite_sonames] no stock-named bundled sysdeps found "
               "(already rewritten or none bundled)")
     print("[rewrite_sonames] patching consumers")
-    patch_consumers(root, soname_map)
+    patch_consumers(root, sysdeps_dir, soname_map)
 
     if not verify(root):
         return 1
