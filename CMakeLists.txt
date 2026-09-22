@@ -129,6 +129,24 @@ if(VISION_PACK_ENABLE_ROCAL)
   # Bundled sysdeps staging dir (set by third-party/CMakeLists.txt)
   set(_bstage "${VP_BUNDLED_DEPS_STAGE}")
 
+  # Pin the exact Python for rocAL_pybind. Unlike rocCV/rocpydecode (which honour
+  # Python3_ROOT_DIR for a single find), rocAL_pybind loops PYTHON_VERSIONS
+  # 3.13..3.8 and builds a binding for EVERY interpreter it finds — so it also
+  # picks up manylinux's static /opt/python/cp38 and compiles it against the
+  # bundled pybind11 3.1.0, which needs Python >= 3.9 (cp38 build fails with
+  # undeclared PyObject_Vectorcall / PyThreadState_GetFrame). PYTHON_VERSION_
+  # SUGGESTED collapses that loop to one version. Derive major.minor from the
+  # forwarded shared interpreter so it tracks Python3_ROOT_DIR, no hardcoding.
+  set(_rocal_py_suggested "")
+  if(Python3_ROOT_DIR AND EXISTS "${Python3_ROOT_DIR}/bin/python3")
+    execute_process(
+      COMMAND "${Python3_ROOT_DIR}/bin/python3" -c
+              "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+      OUTPUT_VARIABLE _rocal_py_suggested
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  endif()
+
   set(_rocal_cmake_args
     -DBACKEND=HIP
     -DGPU_SUPPORT=ON
@@ -149,6 +167,8 @@ if(VISION_PACK_ENABLE_ROCAL)
     # so forward the shared Python (same as rocCV/rocpydecode) or rocal_pybind is
     # skipped even once pybind11 is found.
     $<$<BOOL:${Python3_ROOT_DIR}>:-DPython3_ROOT_DIR=${Python3_ROOT_DIR}>
+    # Build ONE binding, for the forwarded interpreter, not the 3.13..3.8 sweep.
+    $<$<BOOL:${_rocal_py_suggested}>:-DPYTHON_VERSION_SUGGESTED=${_rocal_py_suggested}>
   )
 
   if(VISION_PACK_ENABLE_MIVISIONX)
