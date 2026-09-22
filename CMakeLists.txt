@@ -89,10 +89,10 @@ if(VISION_PACK_ENABLE_MIVISIONX)
   )
 endif()
 
-# rocCV — no inter-library deps, only needs ROCm SDK
+# roccv — no inter-library deps, only needs ROCm SDK
 if(VISION_PACK_ENABLE_ROCCV)
-  vision_pack_subproject_declare(rocCV
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocCV"
+  vision_pack_subproject_declare(roccv
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/roccv"
     CMAKE_ARGS
       -DBUILD_PYPACKAGE=ON
       "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
