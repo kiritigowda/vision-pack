@@ -133,13 +133,14 @@ if(VISION_PACK_ENABLE_ROCAL)
     -DBACKEND=HIP
     -DGPU_SUPPORT=ON
     -DBUILD_PYPACKAGE=ON
-    -DBUILD_WITH_FFMPEG=OFF
-    -DBUILD_WITH_OPENCV=OFF
-    # WebDataset reader is disabled by design (keeps the tree self-contained).
-    # rocAL enables it opportunistically via find_package(LibTar QUIET), so a
-    # stray host libtar-dev would silently link an untracked runtime dep and
-    # flip on -DENABLE_WDS. Force the find to a no-op so the outcome is
-    # deterministic regardless of the build host (#38).
+    # ffmpeg (video reader) and WebDataset (libtar) are disabled by design to
+    # keep the tree self-contained. rocAL has no BUILD_WITH_* switches for these;
+    # it enables each opportunistically via find_package(<Pkg> QUIET). So a stray
+    # host ffmpeg/libtar-dev would silently link an untracked runtime dep (and
+    # libtar flips on -DENABLE_WDS). Disable the finds so the outcome is
+    # deterministic regardless of the build host (#38). OpenCV needs no flag —
+    # current rocAL never looks for it.
+    -DCMAKE_DISABLE_FIND_PACKAGE_FFmpeg=ON
     -DCMAKE_DISABLE_FIND_PACKAGE_LibTar=ON
     "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON

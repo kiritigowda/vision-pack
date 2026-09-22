@@ -262,8 +262,10 @@ ctest --output-on-failure -R rocal
 | libsndfile | 1.2.2 | LGPL-2.1 | `lib/rocm_sysdeps/lib/` | rocAL audio augmentation; built without external codecs |
 
 **Excluded by design:** ffmpeg (libavcodec/avformat/avutil/swscale) and OpenCV.
-rocAL is built with `-DBUILD_WITH_FFMPEG=OFF -DBUILD_WITH_OPENCV=OFF` to keep
-the dependency tree self-contained.
+rocAL has no build switch for these — it picks them up via `find_package(... QUIET)`
+— so the build passes `-DCMAKE_DISABLE_FIND_PACKAGE_FFmpeg=ON` to keep the
+dependency tree self-contained and deterministic across build hosts. OpenCV needs
+no flag; current rocAL never looks for it.
 
 ---
 
@@ -327,7 +329,7 @@ The `package.yml` CI workflow produces:
   the build self-contained.
 
 - **rocAL ffmpeg reader disabled** — requires libavcodec/avformat chain,
-  excluded by design (`-DBUILD_WITH_FFMPEG=OFF`).
+  excluded by design (`-DCMAKE_DISABLE_FIND_PACKAGE_FFmpeg=ON`).
 
 ---
 
