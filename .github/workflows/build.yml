@@ -522,14 +522,27 @@ jobs:
           AGO_DEFAULT_TARGET: CPU
           HIP_PLATFORM: amd
         run: |
+          # Some libraries' test suites need a real ROCm device even for their
+          # "*_cpu" cases; set REQUIRES_GPU=1 so we skip them cleanly on this
+          # GPU-less runner rather than segfaulting (see the rocal note below).
+          REQUIRES_GPU=0
           case "${{ matrix.lib }}" in
             mivisionx)
+              # runvx CPU-affinity GDF tests are genuinely GPU-free.
               TEST_SRC="${ROCM_PATH}/share/mivisionx/test"
               FILTER='-R openvx_gdf_tests_CPU|openvx_vision_coverage'
               EXTRA_CMAKE='' ;;
             rocal)
+              # rocAL's "*_cpu" tests still init a HIP context in rocalCreate()
+              # (ROCAL_PROCESS_CPU is CPU *processing*, not a GPU-free build), so
+              # they segfault with "no ROCm-capable device is detected" on a
+              # runner with no GPU. rocAL's own CI passes these because it runs
+              # on a GPU self-hosted runner. We have no GPU here, so gate on
+              # device presence; CPU runtime coverage for rocAL comes from the
+              # import rocal_pybind smoke test below.
               TEST_SRC="${ROCM_PATH}/share/rocal/test"
               FILTER='-R _cpu$'
+              REQUIRES_GPU=1
               EXTRA_CMAKE='' ;;
             roccv)
               TEST_SRC="${ROCM_PATH}/share/roccv/test/cpp"
@@ -550,6 +563,14 @@ jobs:
 
           if [ -z "${TEST_SRC}" ] || [ ! -d "${TEST_SRC}" ]; then
             echo "${{ matrix.lib }}: no installed test sources — skipping ctest"
+            exit 0
+          fi
+
+          # A GPU-gated suite (rocal) can't run without a ROCm device. /dev/kfd
+          # is the amdkfd interface; its absence means no usable GPU. Skip with
+          # a clear ::warning:: instead of letting every test segfault.
+          if [ "${REQUIRES_GPU}" = "1" ] && [ ! -e /dev/kfd ]; then
+            echo "::warning::${{ matrix.lib }}: no ROCm GPU on this runner (/dev/kfd absent) — skipping its ctest suite; its *_cpu tests still initialize a HIP context and would segfault. CPU runtime coverage is provided by the import smoke test."
             exit 0
           fi
 
