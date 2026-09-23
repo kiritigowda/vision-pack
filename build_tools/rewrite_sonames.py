@@ -63,15 +63,20 @@ CONSUMER_GLOBS = [
     "lib/rocal_pybind*.so",
 ]
 
-# RPATH entries every consumer must carry so the loader finds the bundled
-# sysdeps in rocm_sysdeps/lib at runtime. Matches VP_INSTALL_RPATH in
-# CMakeLists.txt. rocAL forces CMAKE_SKIP_INSTALL_RPATH (rocAL CMakeLists.txt),
-# stripping the RPATH our ExternalProject passes via -DCMAKE_INSTALL_RPATH, so
-# librocal.so ships with no RPATH and cannot locate the renamed *-rocm-vision
-# deps. We re-add it here (post-build, no submodule edit). rocal_pybind.so DOES
-# ship an RPATH ($ORIGIN:$ORIGIN/llvm/lib for OpenMP/llvm), so we append the
-# missing sysdeps entry rather than overwrite what it already has.
-REQUIRED_RPATH_ENTRIES = ["$ORIGIN", "$ORIGIN/../lib/rocm_sysdeps/lib"]
+# RPATH entries every consumer must carry so the loader finds the renamed
+# *-rocm-vision deps and libomp at runtime. Matches VP_INSTALL_RPATH in
+# CMakeLists.txt. rocAL sets CMAKE_SKIP_INSTALL_RPATH (rocal/CMakeLists.txt:99),
+# discarding the value the ExternalProject passes, so they are applied here.
+# $ORIGIN/llvm/lib locates libomp.so, which rocAL requires via OpenMP (#43).
+REQUIRED_RPATH_ENTRIES = [
+    "$ORIGIN",
+    "$ORIGIN/../lib/rocm_sysdeps/lib",
+    "$ORIGIN/llvm/lib",
+]
+
+# RPATH applied to the bundled sysdeps. They sit together in rocm_sysdeps/lib,
+# so $ORIGIN is sufficient.
+SYSDEP_RPATH = "$ORIGIN"
 
 # Matches libNAME.so, libNAME.so.MAJOR, libNAME.so.MAJOR.MINOR.PATCH
 _SO_RE = re.compile(r"^lib(?P<stem>.+?)\.so(?P<ver>(?:\.\d+)*)$")
@@ -198,6 +203,35 @@ def isolated_soname(sysdeps_dir, stem):
     return _soname_of(candidates[0])
 
 
+def normalize_sysdep_rpaths(sysdeps_dir):
+    """Force a relocatable $ORIGIN RPATH onto every bundled sysdep.
+
+    third-party/CMakeLists.txt passes VP_BUNDLED_RPATH, but not every upstream
+    build honours it: libjpeg-turbo overrides it with the absolute stage path,
+    and protobuf produced an all-empty RPATH whose tokens the loader resolves
+    against the working directory (#45). This pass fixes what ships.
+    """
+    for so in sorted(p for p in sysdeps_dir.glob("lib*.so*")
+                     if p.is_file() and not p.is_symlink()):
+        current = _current_rpath(so)
+        if current == SYSDEP_RPATH:
+            continue
+        _run(["patchelf", "--set-rpath", SYSDEP_RPATH, str(so)])
+        print(f"  {so.name}: RPATH [{current or '<none>'}] -> {SYSDEP_RPATH}")
+
+
+def bad_rpath_entries(rpath):
+    """Return RPATH entries that will not survive leaving the build machine.
+
+    Empty tokens resolve to the working directory; anything not $ORIGIN-relative
+    is an absolute path naming the build host.
+    """
+    if not rpath:
+        return []
+    return [entry or "<empty>" for entry in rpath.split(":")
+            if not entry or not entry.startswith("$ORIGIN")]
+
+
 def patch_consumers(root, sysdeps_dir, soname_map):
     consumers = []
     for pattern in CONSUMER_GLOBS:
@@ -224,20 +258,26 @@ def patch_consumers(root, sysdeps_dir, soname_map):
         if jpeg_soname and jpeg_soname not in needed:
             _run(["patchelf", "--add-needed", jpeg_soname, str(consumer)])
             print(f"  {consumer.name}: +NEEDED {jpeg_soname} (raw libjpeg API)")
-        # rocAL strips librocal.so's install RPATH (CMAKE_SKIP_INSTALL_RPATH),
-        # so re-add the entries that locate the bundled sysdeps at runtime.
-        # rocal_pybind.so keeps its own RPATH ($ORIGIN/llvm/lib for OpenMP), so
-        # merge in only the missing entries rather than clobber it.
-        rpath_parts = [p for p in _current_rpath(consumer).split(":") if p]
-        missing = [e for e in REQUIRED_RPATH_ENTRIES if e not in rpath_parts]
-        if missing:
-            new_rpath = ":".join(rpath_parts + missing)
-            _run(["patchelf", "--set-rpath", new_rpath, str(consumer)])
-            print(f"  {consumer.name}: RPATH -> {new_rpath}")
+        # Apply the required entries and drop anything not $ORIGIN-relative.
+        # rocAL's link-time -Wl,-rpath flags leave build-host absolutes behind
+        # (librocal.so: the build ROCM_PATH; rocal_pybind.so: a bare /llvm/lib
+        # from an unexpanded $ORIGIN), which are searched ahead of the relative
+        # entries and resolve to nothing on the target.
+        current = [p for p in _current_rpath(consumer).split(":") if p]
+        kept = [p for p in current if p.startswith("$ORIGIN")]
+        rpath_parts = kept + [e for e in REQUIRED_RPATH_ENTRIES if e not in kept]
+        if rpath_parts != current:
+            dropped = [p for p in current if not p.startswith("$ORIGIN")]
+            if dropped:
+                print(f"  {consumer.name}: dropped non-relocatable RPATH {dropped}")
+            _run(["patchelf", "--set-rpath", ":".join(rpath_parts), str(consumer)])
+            print(f"  {consumer.name}: RPATH -> {':'.join(rpath_parts)}")
 
 
-def verify(root):
-    """Fail if any consumer still lists a stock bundled SONAME as NEEDED."""
+def verify(root, sysdeps_dir):
+    """Fail on a stock bundled SONAME, or an RPATH that won't survive shipping."""
+    ok = True
+
     stock_sonames = set()
     for pattern in CONSUMER_GLOBS:
         for consumer in sorted(root.glob(pattern)):
@@ -251,12 +291,34 @@ def verify(root):
                 new_name = new_basename(n)
                 if new_name is not None:  # a stock bundled soname slipped through
                     stock_sonames.add(f"{consumer.name}:{n}")
+            # A consumer missing the llvm/lib entry aborts at load on
+            # libomp.so (#43).
+            rpath = _current_rpath(consumer)
+            missing = [e for e in REQUIRED_RPATH_ENTRIES if e not in rpath.split(":")]
+            if missing:
+                print(f"ERROR: {consumer.name} RPATH is missing {missing}")
+                ok = False
+            bad = bad_rpath_entries(rpath)
+            if bad:
+                print(f"ERROR: {consumer.name} has non-relocatable RPATH entries: {bad}")
+                ok = False
+
     if stock_sonames:
         print("ERROR: consumers still reference stock bundled SONAMEs:")
         for s in sorted(stock_sonames):
             print(f"  {s}")
-        return False
-    return True
+        ok = False
+
+    # Bundled deps must be relocatable: no build-host paths, no empty
+    # tokens (#45).
+    for so in sorted(p for p in sysdeps_dir.glob("lib*.so*")
+                     if p.is_file() and not p.is_symlink()):
+        bad = bad_rpath_entries(_current_rpath(so))
+        if bad:
+            print(f"ERROR: {so.name} has non-relocatable RPATH entries: {bad}")
+            ok = False
+
+    return ok
 
 
 def main():
@@ -280,10 +342,12 @@ def main():
     if not soname_map:
         print("[rewrite_sonames] no stock-named bundled sysdeps found "
               "(already rewritten or none bundled)")
+    print("[rewrite_sonames] normalizing bundled sysdep RPATHs")
+    normalize_sysdep_rpaths(sysdeps_dir)
     print("[rewrite_sonames] patching consumers")
     patch_consumers(root, sysdeps_dir, soname_map)
 
-    if not verify(root):
+    if not verify(root, sysdeps_dir):
         return 1
     print("[rewrite_sonames] done — bundled sysdeps isolated as *"
           f"{SUFFIX}.so*")

@@ -29,12 +29,13 @@ set(VP_SYSDEPS_LIBDIR    "lib/rocm_sysdeps/lib"
 set(VP_SYSDEPS_INCLUDEDIR "lib/rocm_sysdeps/include"
     CACHE STRING "Install subdir for bundled runtime dep headers")
 
-# RPATH baked into every vision .so:
-#   1. rocm_sysdeps/lib — our bundled deps + ROCm's existing sysdeps (zlib etc.)
-#   2. $ORIGIN           — sibling libs in the same lib/ dir
-set(VP_BUNDLED_RPATH
-    "$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib"
-    CACHE STRING "RPATH baked into vision library .so files")
+# RPATH for the bundled deps themselves. They install side by side in
+# rocm_sysdeps/lib, so $ORIGIN is the only entry required. Left unset, each
+# upstream build supplies its own: libjpeg-turbo an absolute stage path,
+# protobuf all-empty tokens that the loader resolves against the working
+# directory (#45). build_tools/rewrite_sonames.py normalizes what ships.
+set(VP_BUNDLED_RPATH "$ORIGIN"
+    CACHE STRING "RPATH baked into the bundled runtime deps in rocm_sysdeps/lib")
 
 # Build-time staging prefix for bundled deps (maps to rocm_sysdeps/ at install)
 set(_vp_sysdeps_stage "${CMAKE_BINARY_DIR}/third-party/rocm_sysdeps")
@@ -130,6 +131,12 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE
         -Wno-stringop-overread -Wno-error=stringop-overread)
+      # The install(CODE) glob below copies these .so's out of the build tree,
+      # and file(INSTALL) performs no RPATH fixup, so the build-tree RPATH is
+      # what ships. Apply the install RPATH at build time instead (#45).
+      set_target_properties(${_t} PROPERTIES
+        BUILD_WITH_INSTALL_RPATH ON
+        INSTALL_RPATH "${VP_BUNDLED_RPATH}")
     endif()
   endforeach()
   vision_pack_provide_package(protobuf Protobuf "third-party/protobuf-build")
@@ -165,6 +172,12 @@ if(VISION_PACK_BUNDLE_TURBOJPEG)
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      # No effect today: libjpeg-turbo's CMakeLists.txt:334 sets
+      # CMAKE_INSTALL_RPATH as a normal variable, which shadows this cache
+      # entry and bakes in the absolute stage path. rewrite_sonames.py corrects
+      # the shipped RPATH; this is kept for when upstream stops overriding it.
+      "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+      -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF
       -DENABLE_SHARED=ON
       -DENABLE_STATIC=OFF
       -DWITH_TURBOJPEG=ON
@@ -236,6 +249,8 @@ if(VISION_PACK_BUNDLE_LIBSNDFILE)
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      "-DCMAKE_INSTALL_RPATH=${VP_BUNDLED_RPATH}"
+      -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF
       -DBUILD_SHARED_LIBS=ON
       -DBUILD_PROGRAMS=OFF
       -DBUILD_EXAMPLES=OFF
