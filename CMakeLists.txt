@@ -107,7 +107,16 @@ endif()
 # rocpydecode hardcodes ${ROCM_PATH}/share/rocdecode/utils for utility sources,
 # which the dcgpu-tests SDK tarball provides directly under ROCM_PATH.
 if(VISION_PACK_ENABLE_ROCPYDECODE)
-  set(_rocpydecode_cmake_args "-DROCM_PATH=${ROCM_PATH}")
+  # Force lib/ (not lib64/). rocpydecode's videoDecode/jpegDecode use
+  # GNUInstallDirs, which defaults CMAKE_INSTALL_LIBDIR to lib64 on the RHEL-
+  # based manylinux image — so rocpydecode.*.so + rocpyjpegdecode.*.so land in
+  # build/staging/lib64/, off the vision-pack lib/ layout (the .pth, the
+  # packaging tree, and the import smoke test's PYTHONPATH all use lib/). rocCV
+  # and rocAL already pin lib in their own CMakeLists; rocpydecode does not, so
+  # pin it here to match — otherwise `import rocpyjpegdecode` is never found.
+  set(_rocpydecode_cmake_args
+    "-DROCM_PATH=${ROCM_PATH}"
+    "-DCMAKE_INSTALL_LIBDIR=lib")
   # rocpydecode calls find_package(Python3 ... Development) which needs
   # libpython3.x.so. Forward Python3_ROOT_DIR if set (e.g. to
   # /opt/python-shared in manylinux where the default Python is static).
