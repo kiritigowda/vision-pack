@@ -500,6 +500,11 @@ jobs:
       - name: Install staged tree into ROCM_PATH
         run: |
           cp -r staging/. "${ROCM_PATH}/"
+          # actions/upload-artifact does not preserve the Unix exec bit, so
+          # bin/runvx arrives as 0644 and the mivisionx GDF test dies with
+          # "PermissionError: [Errno 13] Permission denied: .../bin/runvx".
+          # Restore exec on the delivered binaries.
+          chmod -R +x "${ROCM_PATH}/bin" 2>/dev/null || true
           echo "Installed test sources:"
           ls -d "${ROCM_PATH}"/share/${{ matrix.lib }}/test 2>/dev/null || true
 
