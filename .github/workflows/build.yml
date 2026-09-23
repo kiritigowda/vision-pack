@@ -1,8 +1,10 @@
 # vision-pack build workflow
 #
 # Builds all four ROCm CV libraries inside manylinux_2_28 against the
-# Quartz nightly SDK. Vision libs contain no GPU kernel code so a single
-# build covers all supported GPU families — no per-family matrix needed.
+# Quartz nightly SDK. The vision libs do contain GPU kernels, but the HIP
+# compiler emits a code object per gfx target and bundles them all into one
+# fat binary, so a single build covers every architecture — no per-family
+# matrix needed.
 #
 # Designed as a reusable workflow (workflow_call) so nightly.yml can call
 # it after bumping submodules, following TheRock's pattern of using one
@@ -86,13 +88,14 @@ env:
   CMAKE_BUILD_TYPE: Release
   VP_BUILD_PARALLEL: 24
   # Default SDK family when neither rocm_sdk_url nor rocm_sdk_family is given.
-  # Any family works (vision libs have no GPU kernel code); this variant
+  # Any family works (the compiler bundles a code object per gfx); this variant
   # bundles rpp/rocdecode/rocjpeg + share/rocdecode/utils.
   ROCM_SDK_FAMILY_DEFAULT: gfx94X-dcgpu-tests
 
 jobs:
   build:
-    # Vision libs have no GPU kernel code — one build covers all GPU families.
+    # One build covers all GPU families: the HIP compiler bundles a code object
+    # per gfx target into each .so, so no per-architecture build is needed.
     # Use TheRock's pre-built manylinux image which already has gcc-toolset-13,
     # LIBRARY_PATH, and all build prerequisites configured correctly for
     # amdclang++/lld builds. Same image TheRock uses for all its components.
@@ -379,6 +382,116 @@ jobs:
             echo "  ERROR: librocal.so has no RPATH to rocm_sysdeps/lib"
             FAIL=1
           fi
+          # libomp ships at lib/llvm/lib, so any library with a NEEDED on it
+          # must carry $ORIGIN/llvm/lib or it aborts at load (#43). Selected by
+          # NEEDED rather than by name to cover libs that add OpenMP later.
+          echo "=== libs NEEDing libomp can resolve it? ==="
+          for SO in build/staging/lib/*.so*; do
+            { [ -f "${SO}" ] && [ ! -L "${SO}" ]; } || continue
+            patchelf --print-needed "${SO}" 2>/dev/null \
+              | grep -q '^libomp\.so' || continue
+            RP="$(patchelf --print-rpath "${SO}" 2>/dev/null || true)"
+            if printf '%s' "${RP}" | tr ':' '\n' | grep -q 'llvm/lib$'; then
+              echo "  $(basename "${SO}"): OK"
+            else
+              echo "  ERROR: $(basename "${SO}") NEEDs libomp.so but its RUNPATH"
+              echo "         lacks llvm/lib (${RP:-<none>})"
+              FAIL=1
+            fi
+          done
+          # Bundled deps must ship a RUNPATH that survives leaving the build
+          # machine: no absolute stage paths, and no empty tokens, which the
+          # loader resolves against the working directory (#45).
+          echo "=== bundled sysdeps have relocatable RUNPATHs? ==="
+          for SO in "${SYSDEPS}"/lib*.so*; do
+            { [ -f "${SO}" ] && [ ! -L "${SO}" ]; } || continue
+            RP="$(patchelf --print-rpath "${SO}" 2>/dev/null || true)"
+            if [ -z "${RP}" ]; then
+              echo "  $(basename "${SO}"): no RUNPATH: OK"
+              continue
+            fi
+            BAD="$(printf '%s' "${RP}" | tr ':' '\n' \
+              | sed 's/^$/<empty>/' | grep -v '^\$ORIGIN' || true)"
+            if [ -n "${BAD}" ]; then
+              echo "  ERROR: $(basename "${SO}") has non-relocatable RUNPATH entries:"
+              echo "${BAD}" | sed 's/^/           /'
+              FAIL=1
+            else
+              echo "  $(basename "${SO}"): ${RP}: OK"
+            fi
+          done
+          # ROCm vendors its sysdeps under renamed librocm_sysdeps_<name>
+          # SONAMEs, so a plain NEEDED on something ROCm also vendors (libz,
+          # libzstd, libelf, libnuma, libdrm, ...) means the host copy was
+          # linked instead of the one shipped in the tree. This holds today
+          # because the bundled deps are built without external codecs; the
+          # gate prevents a flag change from regressing it silently.
+          echo "=== deps sourced from rocm_sysdeps, not the host? ==="
+          ROCM_SYS="${ROCM_PATH}/lib/rocm_sysdeps/lib"
+          BASE_RE='^(libc|libm|libdl|libpthread|librt|libstdc\+\+|libgcc_s|ld-linux-x86-64|libomp)\.so'
+          for SO in build/staging/lib/*.so* "${SYSDEPS}"/*.so*; do
+            { [ -f "${SO}" ] && [ ! -L "${SO}" ]; } || continue
+            for N in $(patchelf --print-needed "${SO}" 2>/dev/null); do
+              case "${N}" in librocm_sysdeps_*|*rocm-vision*) continue ;; esac
+              printf '%s' "${N}" | grep -qE "${BASE_RE}" && continue
+              STEM="$(printf '%s' "${N}" | sed -n 's/^lib\([a-z0-9+_-]*\)\.so.*/\1/p')"
+              [ -n "${STEM}" ] || continue
+              if ls "${ROCM_SYS}"/librocm_sysdeps_"${STEM}".so* >/dev/null 2>&1; then
+                echo "  ERROR: $(basename "${SO}") NEEDs ${N} from the host, but"
+                echo "         ROCm vendors librocm_sysdeps_${STEM} in rocm_sysdeps"
+                FAIL=1
+              fi
+            done
+          done
+          echo "  host-duplicate check complete"
+          # Each vision lib carries one HIP code object per gfx target in its
+          # .hip_fatbin. The target list comes from the compiler default (no
+          # AMDGPU_TARGETS is set here), so it shifts with the SDK: log the
+          # coverage for diffing between runs and fail if a lib has none.
+          # Do not use `llvm-objdump --offloading`: it extracts each bundle as
+          # a file beside the library, polluting the staging tree.
+          # A versioned .so must be one real file plus symlinks. If the chain is
+          # flattened into duplicate regular files the loader maps the library
+          # twice under two inodes, and libvx_rpp's exported
+          # get_kernels_to_publish interposes to the first copy while
+          # vxPublishKernels runs in the second against a NULL Kernel_List —
+          # a segfault in rocalCreate() (#43).
+          echo "=== versioned SO chains are symlinks, not copies? ==="
+          for BASE in libopenvx libvxu libvx_rpp librocal libroccv; do
+            REAL=0
+            for SO in build/staging/lib/${BASE}.so*; do
+              [ -e "${SO}" ] || continue
+              [ -L "${SO}" ] && continue
+              REAL=$((REAL + 1))
+            done
+            [ "${REAL}" -eq 0 ] && continue
+            if [ "${REAL}" -eq 1 ]; then
+              echo "  ${BASE}: 1 real file + symlinks: OK"
+            else
+              echo "  ERROR: ${BASE} has ${REAL} real files; the SONAME chain"
+              echo "         was flattened into duplicate copies"
+              FAIL=1
+            fi
+          done
+          echo "=== bundled GPU code objects per library ==="
+          for BASE in libopenvx libvx_rpp libroccv librocal; do
+            SO="$(readlink -f "build/staging/lib/${BASE}.so" 2>/dev/null || true)"
+            [ -n "${SO}" ] && [ -f "${SO}" ] || continue
+            FAT="$(mktemp)"
+            ARCHES=""
+            if objcopy -O binary --only-section=.hip_fatbin "${SO}" "${FAT}" 2>/dev/null \
+               && [ -s "${FAT}" ]; then
+              ARCHES="$(strings -a "${FAT}" | grep -oE 'gfx[0-9a-f]+' \
+                | sort -u | tr '\n' ' ')"
+            fi
+            rm -f "${FAT}"
+            COUNT="$(printf '%s' "${ARCHES}" | wc -w)"
+            echo "  ${BASE}: ${COUNT} arch(es): ${ARCHES:-<none>}"
+            if [ "${COUNT}" -eq 0 ]; then
+              echo "  ERROR: ${BASE} ships no GPU code objects"
+              FAIL=1
+            fi
+          done
           # librocal calls the raw libjpeg API (jpeg_std_error) but rocAL only
           # links libturbojpeg, so rewrite_sonames.py adds the isolated libjpeg
           # as an explicit NEEDED. Without it librocal.so fails to load (#39).
@@ -424,11 +537,27 @@ jobs:
             > build/staging/share/vision-pack/vision-pack-manifest.json
           echo "Version: ${VER}  Artifact: ${ARTIFACT}"
 
+      # Pack the staging tree before uploading. actions/upload-artifact stores
+      # neither symlinks (it follows them and uploads copies) nor the Unix
+      # permission bits, and both matter here:
+      #   - libvx_rpp.so/.so.3/.so.3.3.2 arrive as three identical regular
+      #     files, so the loader loads the library twice under two inodes and
+      #     vxPublishKernels dereferences a NULL Kernel_List — every rocAL
+      #     program segfaults in rocalCreate() (#43).
+      #   - bin/runvx arrives 0644 and every runvx-based test fails to execute
+      #     (#44).
+      # A tarball round-trips both intact, so every consumer (test job,
+      # packaging job, dist tarball) receives the tree exactly as staged.
+      - name: Pack staged tree
+        run: |
+          tar -czf vision-pack-staging.tar.gz -C build/staging .
+          echo "Packed $(du -h vision-pack-staging.tar.gz | cut -f1)"
+
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.meta.outputs.artifact_name }}
-          path: build/staging/
+          path: vision-pack-staging.tar.gz
           # Nightly artifacts kept longer than CI artifacts
           retention-days: ${{ inputs.release_type == 'nightly' && 30 || 7 }}
 
@@ -514,14 +643,12 @@ jobs:
           name: ${{ needs.build.outputs.artifact_name }}
           path: staging
 
+      # Unpack straight into ROCM_PATH. The artifact is a tarball, so symlinks
+      # and exec bits survive and no chmod fix-up is needed.
       - name: Install staged tree into ROCM_PATH
         run: |
-          cp -r staging/. "${ROCM_PATH}/"
-          # actions/upload-artifact does not preserve the Unix exec bit, so
-          # bin/runvx arrives as 0644 and the mivisionx GDF test dies with
-          # "PermissionError: [Errno 13] Permission denied: .../bin/runvx".
-          # Restore exec on the delivered binaries.
-          chmod -R +x "${ROCM_PATH}/bin" 2>/dev/null || true
+          tar -xzf staging/vision-pack-staging.tar.gz -C "${ROCM_PATH}"
+          echo "runvx: $(stat -c '%a %n' "${ROCM_PATH}/bin/runvx" 2>/dev/null || echo absent)"
           echo "Installed test sources:"
           ls -d "${ROCM_PATH}"/share/${{ matrix.lib }}/test 2>/dev/null || true
 

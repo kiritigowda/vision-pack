@@ -80,7 +80,19 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_name }}
-          path: staging/
+          path: staging-archive/
+
+      # build.yml uploads the staging tree as a tarball so the artifact
+      # round-trip preserves symlinks and exec bits (#43, #44). Unpack it here
+      # and everything downstream — CPack and the dist tarball — sees the tree
+      # exactly as it was staged.
+      - name: Unpack staged tree
+        run: |
+          mkdir -p staging
+          tar -xzf staging-archive/vision-pack-staging.tar.gz -C staging
+          echo "runvx: $(stat -c '%a %n' staging/bin/runvx 2>/dev/null || echo absent)"
+          echo "libvx_rpp chain:"
+          ls -l staging/lib/libvx_rpp.so* 2>/dev/null || true
 
       - name: Show staging layout
         run: |
@@ -95,14 +107,6 @@ jobs:
           echo "=== Manifest ==="
           cat staging/share/vision-pack/vision-pack-manifest.json 2>/dev/null \
             | python3 -m json.tool || echo "(no manifest)"
-
-      - name: Restore executable bit on staged binaries
-        run: |
-          # actions/upload-artifact does not preserve the Unix exec bit, so
-          # staging/bin/runvx arrives as 0644. Without this the .deb/.rpm and
-          # tarball would ship a non-executable runvx. Restore exec on bin/.
-          chmod -R +x staging/bin 2>/dev/null || true
-          ls -l staging/bin 2>/dev/null || echo "(no staging/bin)"
 
       - name: Determine package version
         id: version
@@ -181,6 +185,29 @@ jobs:
           tar -czf "${TARBALL}" -C staging/ .
           ls -lh "${TARBALL}"
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
+          # What users actually extract. A flattened SONAME chain double-loads
+          # libvx_rpp and segfaults rocalCreate() (#43); a non-executable runvx
+          # fails every runvx-based test (#44).
+          FAIL=0
+          echo "=== libvx_rpp chain in the dist tarball ==="
+          CHAIN="$(tar -tvzf "${TARBALL}" | grep 'lib/libvx_rpp\.so' || true)"
+          echo "${CHAIN}"
+          LINKS="$(printf '%s\n' "${CHAIN}" | grep -c '^l' || true)"
+          if [ "${LINKS}" -lt 2 ]; then
+            echo "ERROR: libvx_rpp SONAME chain is not symlinked in the tarball"
+            FAIL=1
+          fi
+          echo "=== runvx mode in the dist tarball ==="
+          RUNVX="$(tar -tvzf "${TARBALL}" | grep 'bin/runvx' || true)"
+          echo "${RUNVX}"
+          # Match the mode field only; the filename itself contains an "x".
+          RUNVX_MODE="$(printf '%s\n' "${RUNVX}" | awk 'NR==1{print $1}')"
+          case "${RUNVX_MODE}" in
+            *x*) echo "runvx is executable: OK" ;;
+            "")  echo "ERROR: runvx absent from tarball"; FAIL=1 ;;
+            *)   echo "ERROR: runvx is not executable in the tarball"; FAIL=1 ;;
+          esac
+          [ "${FAIL}" -eq 0 ] || exit 1
 
       - name: Generate meta DEB packages
         working-directory: pkg-build
@@ -403,10 +430,35 @@ jobs:
           # Install conflicting host copies with the STOCK sonames on the
           # default loader path. If isolation works, ldd must still bind the
           # bundled *-rocm-vision copies from rocm_sysdeps, not these.
-          apt-get install -y --no-install-recommends \
-            libprotobuf32t64 libturbojpeg0 liblmdb0 libsndfile1 || \
-          apt-get install -y --no-install-recommends \
-            libprotobuf-lite32t64 libturbojpeg0 liblmdb0 libsndfile1 || true
+          # Installed one at a time: apt aborts the whole transaction on a
+          # single unknown name, so grouping them meant one wrong name
+          # ("libturbojpeg0", which does not exist on Ubuntu 24.04 — the
+          # package is "libturbojpeg") planted no decoys at all and left the
+          # assertion below passing vacuously.
+          for PKG in libturbojpeg libprotobuf32t64 libprotobuf-lite32t64 \
+                     liblmdb0 libsndfile1; do
+            apt-get install -y --no-install-recommends "${PKG}" \
+              || echo "::warning::decoy package ${PKG} unavailable"
+          done
+          # This check only means something if the decoys are actually present,
+          # so fail when none of them could be planted.
+          echo "=== stock sonames planted on the default loader path ==="
+          PLANTED=0
+          for SO in libturbojpeg.so.0 libprotobuf.so.32 liblmdb.so.0 libsndfile.so.1; do
+            HIT="$(ldconfig -p | grep -F "${SO}" | head -1 || true)"
+            if [ -n "${HIT}" ]; then
+              echo "  ${HIT}"
+              PLANTED=$((PLANTED + 1))
+            else
+              echo "  ${SO}: not planted"
+            fi
+          done
+          if [ "${PLANTED}" -eq 0 ]; then
+            echo "ERROR: no conflicting host copies could be installed, so this"
+            echo "       check would pass without proving any isolation"
+            exit 1
+          fi
+          echo "  ${PLANTED} stock soname(s) present"
           echo "=== ldd librocal.so (bundled-dep lines) ==="
           LDD="$(ldd /opt/rocm/lib/librocal.so || true)"
           echo "${LDD}" | grep -Ei "rocm-vision|protobuf|turbojpeg|jpeg|lmdb|sndfile" || true
