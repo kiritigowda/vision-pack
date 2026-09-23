@@ -96,6 +96,14 @@ jobs:
           cat staging/share/vision-pack/vision-pack-manifest.json 2>/dev/null \
             | python3 -m json.tool || echo "(no manifest)"
 
+      - name: Restore executable bit on staged binaries
+        run: |
+          # actions/upload-artifact does not preserve the Unix exec bit, so
+          # staging/bin/runvx arrives as 0644. Without this the .deb/.rpm and
+          # tarball would ship a non-executable runvx. Restore exec on bin/.
+          chmod -R +x staging/bin 2>/dev/null || true
+          ls -l staging/bin 2>/dev/null || echo "(no staging/bin)"
+
       - name: Determine package version
         id: version
         run: |
