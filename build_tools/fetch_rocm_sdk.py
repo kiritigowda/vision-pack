@@ -5,9 +5,10 @@ Download a nightly ROCm SDK tarball.
 Whichever tarball is used must carry the full SDK (HIP, compiler, rocm_sysdeps)
 *plus* rpp, rocDecode, rocJPEG headers/cmake configs and the rocDecode build
 utils (share/rocdecode/utils) under a single prefix — so no separate deb
-overlay is needed. Vision libs have no GPU kernel code, so any GPU family's
-tarball builds all supported families; pick the variant that bundles the CV
-packages above (dcgpu-tests / multi-arch), not by gfx id.
+overlay is needed. The vision libs do contain GPU kernels, but the HIP compiler
+emits a code object per gfx target and bundles them into one fat binary, so any
+GPU family's tarball produces artifacts for every architecture; pick the variant
+that bundles the CV packages above (dcgpu-tests / multi-arch), not by gfx id.
 
 Two selection modes:
 
