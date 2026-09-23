@@ -359,6 +359,18 @@ jobs:
           # binutils → readelf; libc-bin → ldd; python3 for the import check.
           # NO build tools, NO ROCm — this is a clean runtime host on purpose.
           apt-get install -y --no-install-recommends binutils libc-bin python3
+          # Plant host copies carrying the STOCK sonames that the bundled deps
+          # were renamed away from, so the isolation assertion later has
+          # something that could shadow them. This has to happen here, before
+          # the vision DEBs: those are force-installed with unsatisfiable ROCm
+          # depends, after which apt refuses to resolve anything else.
+          # One package per call — apt aborts the whole transaction on a single
+          # unknown name, which previously left no decoys planted at all.
+          for PKG in libturbojpeg libprotobuf32t64 libprotobuf-lite32t64 \
+                     liblmdb0 libsndfile1; do
+            apt-get install -y --no-install-recommends "${PKG}" \
+              || echo "::warning::decoy package ${PKG} unavailable"
+          done
 
       - name: Download DEB artifact
         uses: actions/download-artifact@v8
@@ -427,21 +439,11 @@ jobs:
       - name: Assert host copies do not shadow bundled deps
         run: |
           set -eu
-          # Install conflicting host copies with the STOCK sonames on the
-          # default loader path. If isolation works, ldd must still bind the
-          # bundled *-rocm-vision copies from rocm_sysdeps, not these.
-          # Installed one at a time: apt aborts the whole transaction on a
-          # single unknown name, so grouping them meant one wrong name
-          # ("libturbojpeg0", which does not exist on Ubuntu 24.04 — the
-          # package is "libturbojpeg") planted no decoys at all and left the
-          # assertion below passing vacuously.
-          for PKG in libturbojpeg libprotobuf32t64 libprotobuf-lite32t64 \
-                     liblmdb0 libsndfile1; do
-            apt-get install -y --no-install-recommends "${PKG}" \
-              || echo "::warning::decoy package ${PKG} unavailable"
-          done
-          # This check only means something if the decoys are actually present,
-          # so fail when none of them could be planted.
+          # The decoys carrying the stock sonames were installed before the
+          # vision DEBs (see "Install minimal runtime tools"). If isolation
+          # works, ldd must still bind the bundled *-rocm-vision copies from
+          # rocm_sysdeps rather than these. The assertion only means something
+          # if they are actually present, so fail when none were planted.
           echo "=== stock sonames planted on the default loader path ==="
           PLANTED=0
           for SO in libturbojpeg.so.0 libprotobuf.so.32 liblmdb.so.0 libsndfile.so.1; do
