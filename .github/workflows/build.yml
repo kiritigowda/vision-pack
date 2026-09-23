@@ -322,6 +322,23 @@ jobs:
               echo "  ${NEG_LABEL} absent: OK"
             fi
           done
+          # rocpydecode modules must sit in lib/ with every other vision .so,
+          # not lib64/ (rocpydecode uses GNUInstallDirs, which defaults to lib64
+          # on this image; we pass -DCMAKE_INSTALL_LIBDIR=lib to override).
+          # Non-blocking, matching rocpydecode's best-effort posture (#290): if
+          # its build was dropped the modules are simply absent — only fail if a
+          # module exists but landed in lib64/ instead of lib/.
+          echo "=== rocpydecode modules in lib/ (not lib64/)? ==="
+          for MOD in rocpydecode rocpyjpegdecode; do
+            if ls build/staging/lib64/${MOD}*.so >/dev/null 2>&1; then
+              echo "  ERROR: ${MOD} staged in lib64/ instead of lib/ (CMAKE_INSTALL_LIBDIR override lost)"
+              FAIL=1
+            elif ls build/staging/lib/${MOD}*.so >/dev/null 2>&1; then
+              echo "  ${MOD} in lib/: OK"
+            else
+              echo "  ${MOD} absent (rocpydecode build dropped — non-blocking)"
+            fi
+          done
           echo "=== Staged bundled runtime deps ==="
           ls -la "${SYSDEPS}" 2>/dev/null || echo "(rocm_sysdeps/lib missing)"
           # rocAL must link the shared protobuf (#10) via the isolated SONAME
