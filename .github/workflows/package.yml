@@ -146,6 +146,27 @@ jobs:
         run: |
           cpack -G DEB --verbose
           ls -lh *.deb 2>/dev/null || echo "No .deb files produced"
+          # The rocpydecode modules install to lib/ (CMAKE_INSTALL_LIBDIR=lib);
+          # the packaging globs read from staging/lib/, so a regression that put
+          # them back in lib64/ would silently ship an empty amdrocm-pydecode.
+          # Assert the .so payload is actually inside the package. Non-blocking:
+          # rocpydecode is best-effort (#290), so if the whole build was dropped
+          # the package is legitimately absent — only warn, never fail here.
+          echo "=== amdrocm-pydecode contents ==="
+          PYDECODE_DEB=$(ls amdrocm-*-rocpydecode.deb 2>/dev/null | head -1)
+          if [ -z "${PYDECODE_DEB}" ]; then
+            echo "::warning::no rocpydecode .deb produced (rocpydecode build dropped?)"
+          else
+            CONTENTS=$(dpkg-deb -c "${PYDECODE_DEB}" 2>/dev/null || true)
+            echo "${CONTENTS}" | grep -E 'lib/(rocpydecode|rocpyjpegdecode).*\.so' || true
+            for MOD in rocpydecode rocpyjpegdecode; do
+              if echo "${CONTENTS}" | grep -qE "lib/${MOD}.*\.so"; then
+                echo "  ${MOD} .so packaged: OK"
+              else
+                echo "::warning::${MOD} .so missing from ${PYDECODE_DEB} — modules not in staging/lib/ (empty package)"
+              fi
+            done
+          fi
 
       - name: Generate RPM packages
         working-directory: pkg-build
