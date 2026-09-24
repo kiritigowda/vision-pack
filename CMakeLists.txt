@@ -32,9 +32,11 @@ message(STATUS "[vision-pack] Install prefix:    ${CMAKE_INSTALL_PREFIX}")
 # $ORIGIN/../lib/rocm_sysdeps/lib  finds our bundled deps AND existing ROCm
 #   sysdeps (zlib, bzip2, liblzma etc.) — no new directory, already exists.
 # $ORIGIN                          finds sibling libs (libopenvx → libvx_rpp).
+# $ORIGIN/llvm/lib                 finds libomp.so; rocAL links OpenMP, so
+#   librocal.so carries a NEEDED on it and aborts at load without this (#43).
 # ---------------------------------------------------------------------------
 set(VP_INSTALL_RPATH
-    "$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib"
+    "$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib:$ORIGIN/llvm/lib"
     CACHE STRING "RPATH baked into all vision .so files")
 
 # ---------------------------------------------------------------------------
@@ -116,7 +118,12 @@ if(VISION_PACK_ENABLE_ROCPYDECODE)
   # pin it here to match — otherwise `import rocpyjpegdecode` is never found.
   set(_rocpydecode_cmake_args
     "-DROCM_PATH=${ROCM_PATH}"
-    "-DCMAKE_INSTALL_LIBDIR=lib")
+    "-DCMAKE_INSTALL_LIBDIR=lib"
+    # Same relative RPATH as the other vision libs (#45). USE_LINK_PATH stays
+    # OFF: it appends absolute link-time directories that name the build host's
+    # ROCM_PATH and resolve nowhere on the target.
+    "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"
+    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF)
   # rocpydecode calls find_package(Python3 ... Development) which needs
   # libpython3.x.so. Forward Python3_ROOT_DIR if set (e.g. to
   # /opt/python-shared in manylinux where the default Python is static).

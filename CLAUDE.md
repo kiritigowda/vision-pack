@@ -29,8 +29,10 @@ The end product is a set of DEB/RPM/TGZ packages (`amdrocm-mivisionx`, `amdrocm-
    everything the vision libs need at build time, one prefix. Two selection modes:
    - **Rolling (default):** `--gpu-family <family> [--date YYYYMMDD]` scrapes the nightly index at
      `nightly.repo.amd.com/rocm/core/tarball/` and picks latest (or the dated build). Default family
-     is `gfx94X-dcgpu-tests`. Vision libs have no GPU kernel code, so *any* family builds all
-     families — pick the variant that bundles the CV packages, not by gfx id.
+     is `gfx94X-dcgpu-tests`. The vision libs *do* contain GPU kernels, but the HIP compiler
+     emits a code object per gfx target and bundles them all into one fat binary, so *any*
+     family builds for every architecture — pick the variant that bundles the CV packages,
+     not by gfx id. Verify coverage with `llvm-objdump --offloading <lib>`.
    - **Pinned (`--url <full-tarball-url>`):** bypasses the index entirely. Use for run-id multi-arch
      S3 artifacts (e.g. `therock-nightly-artifacts.s3.amazonaws.com/<run-id>-linux/...`) that have no
      rolling "latest" alias. Overrides `--gpu-family`/`--date`.

@@ -13,6 +13,43 @@ as an independent ExternalProject with stamp-file ordering enforcing
 dependencies. Bundled runtime deps install into `lib/rocm_sysdeps/lib/`
 following the same pattern as ROCm's own sysdeps (zlib, bzip2, liblzma, ...).
 
+**One build, every architecture.** The vision libraries do contain GPU kernels,
+but they never need a per-architecture build. The HIP compiler compiles the
+device code once per target and bundles a code object for every gfx id into a
+fat binary inside each `.so`, so a single pass produces artifacts that run
+everywhere — that is what `multiarch` in the artifact names refers to. There is
+no per-architecture matrix, and the GPU family in an SDK tarball name selects
+*which SDK to build against*, not what the build emits.
+
+The architecture list comes from the ROCm compiler's default — vision-pack sets
+no `AMDGPU_TARGETS` or `--offload-arch`. Built against ROCm 10.2, `libopenvx`,
+`libvx_rpp` and `librocal` each carry 17 code objects (gfx908, gfx90a, gfx942,
+gfx950, gfx1030–1032, gfx1100–1102, gfx1150–1153, gfx1200/1201, gfx1250), while
+`libroccv` carries 13 — it is missing gfx1150, gfx1152, gfx1153 and gfx1250. To
+inspect what any shipped library covers:
+
+```bash
+/opt/rocm/lib/llvm/bin/llvm-objdump --offloading /opt/rocm/lib/libvx_rpp.so
+```
+
+---
+
+## Scope
+
+vision-pack exists to **build, package, test, and deliver** the `amdrocm-vision`
+package set:
+
+- build the four vision libraries plus the dependencies they require;
+- package them so contents and dependency metadata match ROCm conventions;
+- test that what is packaged actually loads and runs;
+- make the artifacts easy for end users to obtain and try.
+
+Fixing functional bugs inside the vision libraries is **out of scope**. Where a
+library needs a change in order to build or package correctly, vision-pack
+carries a workaround that names a filed upstream issue and is removed once that
+issue is fixed — see [Known issues](#known-issues). Workarounds that would hide
+a defect rather than record it are not acceptable.
+
 ---
 
 ## Build graph
@@ -94,10 +131,16 @@ python3 build_tools/fetch_rocm_sdk.py \
     --gpu-family gfx94X-dcgpu-tests --dest /opt/rocm-nightly
 ```
 
-For an existing `/opt/rocm` install, ensure the rpp, rocDecode (with
-`share/rocdecode/utils`), and rocJPEG dev packages are present — these provide
-the headers, cmake configs, and utility sources the vision libraries need at
-build time.
+Any GPU family works (the build is target-neutral); pick the variant that
+bundles the CV packages, not one matching your gfx id.
+
+For an existing `/opt/rocm` install you need the rpp, rocDecode, and rocJPEG
+**dev** packages for headers and cmake configs, **plus `amdrocm-decode-test` and
+`amdrocm-jpeg-test`**. The utility sources under `share/rocdecode/utils`
+(`roc_video_dec.cpp`, `resize_kernels.cpp`) ship in the *test* packages, not the
+dev ones — rocAL compiles them directly, so without them its configure step
+fails with `Cannot find source file`. This is also why CI selects the
+`dcgpu-tests` SDK variant: it carries them under a single prefix.
 
 ### System build tools (Ubuntu 22.04 / 24.04)
 
@@ -129,14 +172,14 @@ git submodule update --init --recursive
 
 ## Build
 
-```bash
-mkdir build && cd build
+Run from the repository root — the install and test steps below assume that.
 
-cmake .. \
+```bash
+cmake -B build -S . \
     -DROCM_PATH=/opt/rocm \
     -DCMAKE_BUILD_TYPE=Release
 
-cmake --build . --parallel $(nproc)
+cmake --build build --parallel $(nproc)
 ```
 
 `CMAKE_INSTALL_PREFIX` defaults to `ROCM_PATH` (`/opt/rocm`) so the install
@@ -147,7 +190,7 @@ step drops files directly into the ROCm tree.
 All four libraries are ON by default. Disable individually:
 
 ```bash
-cmake .. \
+cmake -B build -S . \
     -DVISION_PACK_ENABLE_MIVISIONX=OFF \
     -DVISION_PACK_ENABLE_ROCAL=OFF \
     -DVISION_PACK_ENABLE_ROCCV=OFF \
@@ -163,7 +206,7 @@ By default all deps are built from source. Set to OFF to use system-installed
 versions (useful for distro package builds):
 
 ```bash
-cmake .. \
+cmake -B build -S . \
     -DVISION_PACK_BUNDLE_PYBIND11=OFF \
     -DVISION_PACK_BUNDLE_DLPACK=OFF \
     -DVISION_PACK_BUNDLE_RAPIDJSON=OFF \
@@ -217,9 +260,17 @@ directories — identical conventions to every other ROCm component.
     └── rocpydecode/                 samples
 ```
 
-All vision `.so` files have `$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib` baked
-into their RPATH so bundled deps (and ROCm's existing sysdeps) are found at
-runtime without setting `LD_LIBRARY_PATH`.
+All vision `.so` files have
+`$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib:$ORIGIN/llvm/lib` baked into their
+RPATH, so bundled deps, ROCm's existing sysdeps, and `libomp.so` (rocAL links
+`OpenMP::OpenMP_CXX`) all resolve at runtime with no `LD_LIBRARY_PATH`.
+
+**Every shipped RPATH is relative only.** Upstream link flags otherwise leave
+build-host absolutes behind — `librocal.so` picked up `/opt/rocm/core-*/lib`,
+`rocal_pybind.so` a bare `/llvm/lib`, and the bundled turbojpeg/libjpeg the CI
+stage directory. Those resolve to nothing on a user's machine yet are searched
+*ahead of* the relative entries. `rewrite_sonames.py` strips them, and CI fails
+the build if any shipped `.so` carries an absolute or empty RPATH entry.
 
 **Side-by-side SONAME isolation:** the *packaged* bundled deps ship under
 private `-rocm-vision` SONAMEs (`libturbojpeg-rocm-vision.so`, ...) so a host
@@ -227,8 +278,17 @@ copy of turbojpeg/protobuf/lmdb/sndfile on the default loader path can never
 shadow the vendored build. `librocal.so` / `rocal_pybind.so` are patched to
 reference these names, and an isolated `libjpeg-rocm-vision.so` is added because
 rocAL calls the raw libjpeg API (`jpeg_std_error`) that libturbojpeg does not
-export. The rename is a CPack-time pass (`build_tools/rewrite_sonames.py`); a
-plain local `cmake --install` keeps the stock upstream SONAMEs.
+export. The rename is a post-staging pass (`build_tools/rewrite_sonames.py`, run
+by `build.yml` before packaging); a plain local `cmake --install` keeps the
+stock upstream SONAMEs.
+
+**Dependencies come from the tree, not the host.** The bundled deps are built
+without external codecs (`protobuf_WITH_ZLIB=OFF`, libsndfile
+`ENABLE_EXTERNAL_LIBS=OFF` / `ENABLE_MPEG=OFF`), so nothing vision-pack ships
+links a host copy of a library ROCm already vendors in `rocm_sysdeps` — zlib,
+zstd, libelf, libnuma, libdrm and friends. CI enforces it: the build fails if
+any shipped `.so` has a `NEEDED` on a plain SONAME for which the SDK provides a
+`librocm_sysdeps_*` equivalent.
 
 **Python path registration:** vision-pack ships an `amdrocm-vision-pythonpath`
 package that installs an `amdrocm-vision.pth` file, adding `/opt/rocm/lib` to
@@ -240,22 +300,31 @@ for venv/conda, copy the `.pth` to the environment's site-packages).
 
 ## Test
 
+The aggregator does **not** compile or register tests — running `ctest` inside
+`build/` finds nothing. Each library instead installs its test *sources* and
+data as a `test` component under `share/<lib>/test`. Those are standalone CMake
+projects, built on the target machine against the **installed** runtime. That is
+exactly what the `-test` packages deliver and what CI's test stage mirrors.
+
 ```bash
-cd build
+# 1. Install first — the test projects resolve the libraries from ROCM_PATH
+sudo cmake --install build
 
-# rocPyDecode — fully self-contained, always runnable
-ctest --output-on-failure -R rocpydecode
-
-# MIVisionX — runvx-based GDF tests (no GPU required)
-ctest --output-on-failure -R "openvx_gdf_tests|openvx_vision_coverage"
-
-# rocCV — enable tests at configure time with -DFULL_BUILD=ON
-ctest --output-on-failure -R roccv
-
-# rocAL — requires rocAL installed to ROCM_PATH before running
-# (test CMake builds from source and searches ROCM_PATH for headers)
-ctest --output-on-failure -R rocal
+# 2. Build and run one library's installed suite (MIVisionX shown)
+cmake -B test-build -S "$ROCM_PATH/share/mivisionx/test" \
+    -DROCM_PATH="$ROCM_PATH" -DBACKEND=HIP
+cmake --build test-build --parallel
+ctest --test-dir test-build --output-on-failure
 ```
+
+Per-library notes:
+
+| Library | Test tree | Requires GPU |
+|---|---|---|
+| MIVisionX | `share/mivisionx/test` | GDF `*_CPU` cases do not; `*_GPU` do |
+| rocAL | `share/rocal/test` | Yes — even `*_cpu` cases initialise a HIP context |
+| rocCV | `share/roccv/test/cpp` | GPU cases do |
+| rocPyDecode | *(none installed)* | covered by a Python import check |
 
 ---
 
@@ -304,12 +373,6 @@ The `package.yml` CI workflow produces:
 
 ---
 
-## Release history
-
-- [CHANGELOG.md](CHANGELOG.md) — release history and known issues.
-
----
-
 ## Known issues
 
 - **MIVisionX cmake exports missing** — no `MIVisionXConfig.cmake` installed;
@@ -318,6 +381,28 @@ The `package.yml` CI workflow produces:
 
 - **rocAL cmake exports missing** — no `rocalConfig.cmake` installed.
   [rocAL#514](https://github.com/ROCm/rocAL/issues/514)
+
+- **rocAL link/RPATH defects** — three separate upstream problems, all repaired
+  on the staged tree by `rewrite_sonames.py`. Each repair should be deleted as
+  the corresponding upstream fix lands:
+  1. `librocal.so` calls the raw libjpeg API (`jpeg_std_error`) but
+     `FindTurboJpeg.cmake` links only libturbojpeg, which does not export it —
+     so the isolated libjpeg is added as an explicit `NEEDED`
+     ([#39](https://github.com/kiritigowda/vision-pack/issues/39)).
+  2. `rocal/CMakeLists.txt` forces `CMAKE_SKIP_INSTALL_RPATH`, discarding the
+     install RPATH the build passes in; it is re-added afterwards
+     ([#43](https://github.com/kiritigowda/vision-pack/issues/43)).
+  3. `rocAL_pybind` puts `-Wl,-rpath='$ORIGIN:$ORIGIN/llvm/lib'` in
+     `CMAKE_CXX_FLAGS`, where `$ORIGIN` is expanded away and leaves a bare,
+     useless `/llvm/lib` entry.
+
+- **libjpeg-turbo overrides `CMAKE_INSTALL_RPATH`** — its `CMakeLists.txt:334`
+  does a plain `set(CMAKE_INSTALL_RPATH ${CMAKE_INSTALL_FULL_LIBDIR})`, which
+  shadows the cache value vision-pack passes in, baking the build-time stage
+  directory into the shipped libraries. The `-D` flag is passed anyway for the
+  day upstream stops doing this, but the RPATH normalization in
+  `rewrite_sonames.py` is what actually corrects it
+  ([#45](https://github.com/kiritigowda/vision-pack/issues/45)).
 
 - **rocPyDecode CI build is non-blocking** — rocPyDecode is now built and
   import-tested in CI (`ENABLE_ROCPYDECODE=ON`), but remains **best-effort**:
