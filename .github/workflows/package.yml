@@ -714,18 +714,29 @@ jobs:
           cmake_minimum_required(VERSION 3.20)
           project(vp_findpackage_smoke LANGUAGES CXX)
           list(APPEND CMAKE_MODULE_PATH "/opt/rocm/lib/cmake")
-          list(APPEND CMAKE_PREFIX_PATH "/opt/rocm")
           find_package(MIVisionX REQUIRED)
           find_package(rocal REQUIRED)
-          # rocCV, unlike the other two, ships a real config package upstream,
-          # so it is discovered in CONFIG mode rather than through a shim.
-          find_package(roccv REQUIRED CONFIG)
           message(STATUS "MIVisionX_LIBRARIES=${MIVisionX_LIBRARIES}")
           message(STATUS "MIVisionX_INCLUDE_DIRS=${MIVisionX_INCLUDE_DIRS}")
           message(STATUS "rocal_LIBRARIES=${rocal_LIBRARIES}")
           message(STATUS "rocal_INCLUDE_DIRS=${rocal_INCLUDE_DIRS}")
-          message(STATUS "roccv_FOUND=${roccv_FOUND} roccv_DIR=${roccv_DIR}")
           CMAKE
           echo "=== configuring downstream find_package project ==="
           cmake -S "${WORK}" -B "${WORK}/build" -DROCM_PATH=/opt/rocm
-          echo "find_package for MIVisionX, rocal and roccv resolved: OK"
+          echo "find_package(MIVisionX) and find_package(rocal) resolved: OK"
+
+      # rocCV ships a real config package rather than a shim, and that config
+      # calls find_dependency(HIP). This runner has no ROCm by design, so the
+      # most that can be checked here is that the package config is installed
+      # where CMake would look for it. The configure-time test that actually
+      # resolves it runs in build.yml's roccv leg, which has the SDK.
+      - name: Assert rocCV ships a discoverable package config
+        run: |
+          set -eu
+          CFG=/opt/rocm/lib/cmake/roccv/roccvConfig.cmake
+          if [ ! -f "${CFG}" ]; then
+            echo "ERROR: ${CFG} not installed by amdrocm-roccv-devel"; exit 1
+          fi
+          echo "  ${CFG}: present"
+          echo "  declared dependencies:"
+          grep -E 'find_dependency|find_package' "${CFG}" | sed 's/^/    /' || true

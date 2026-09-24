@@ -780,6 +780,27 @@ jobs:
       # Python import smoke test (#22). CTest can pass while the pybind module
       # is broken (unresolved symbol from a bad link surfaces only at import).
       # A linkage failure (ImportError / undefined symbol) is a real bug and
+      # rocCV ships a real package config, and that config calls
+      # find_dependency(HIP). It can only be resolved where the SDK is present,
+      # so the downstream find_package test for it belongs here rather than in
+      # package.yml's findpackage-test, which runs without ROCm on purpose.
+      - name: Downstream find_package(roccv)
+        if: matrix.lib == 'roccv'
+        run: |
+          set -eu
+          WORK="$(mktemp -d)"
+          cat > "${WORK}/CMakeLists.txt" <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(vp_roccv_findpackage LANGUAGES CXX)
+          find_package(roccv REQUIRED CONFIG)
+          message(STATUS "roccv_FOUND=${roccv_FOUND}")
+          message(STATUS "roccv_DIR=${roccv_DIR}")
+          CMAKE
+          cmake -S "${WORK}" -B "${WORK}/build" \
+            -DROCM_PATH="${ROCM_PATH}" \
+            "-DCMAKE_PREFIX_PATH=${ROCM_PATH};${ROCM_PATH}/lib/cmake;${ROCM_PATH}/lib/llvm"
+          echo "find_package(roccv CONFIG) resolved against the installed tree: OK"
+
       # fails the leg; a GPU-runtime failure (no device on this CPU runner) is
       # tolerated. rocpydecode is newly enabled and upstream-blocked on
       # rocPyDecode#290 (Development.Embed on manylinux), so its import runs in
