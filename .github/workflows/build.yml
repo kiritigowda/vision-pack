@@ -182,7 +182,14 @@ jobs:
             ARGS="${ARGS} --gpu-family ${FAMILY}"
             [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
           fi
-          python3 build_tools/fetch_rocm_sdk.py ${ARGS}
+          python3 build_tools/fetch_rocm_sdk.py ${ARGS} > /tmp/sdk-fetch.log 2>&1 \
+            || { cat /tmp/sdk-fetch.log; exit 1; }
+          cat /tmp/sdk-fetch.log
+          # Record which tarball was actually resolved. "latest" moves, so
+          # without this a nightly that breaks cannot be reproduced (#29).
+          RESOLVED="$(sed -n 's/^Selected[^:]*: //p' /tmp/sdk-fetch.log | head -1)"
+          echo "VP_RESOLVED_SDK=${RESOLVED}" >> "$GITHUB_ENV"
+          echo "Resolved SDK: ${RESOLVED:-<unknown>}"
           echo "SDK cmake packages available:"
           ls "${ROCM_PATH}/lib/cmake/" | head -30
 
@@ -547,12 +554,17 @@ jobs:
           echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
           # Manifest lives under share/vision-pack/ (a proper ROCm subdir), not
           # the staging root — otherwise the dist tarball drops it straight into
-          # /opt/rocm/vision-pack-manifest.json (#37).
-          mkdir -p build/staging/share/vision-pack
-          printf '{"version":"%s","sha":"%s","rocm_path":"%s","build_type":"%s","release_type":"%s"}\n' \
-            "${VER}" "${SHA}" "${ROCM_PATH}" "${CMAKE_BUILD_TYPE}" \
-            "${{ inputs.release_type || 'ci' }}" \
-            > build/staging/share/vision-pack/vision-pack-manifest.json
+          # /opt/rocm/vision-pack-manifest.json (#37). It records the resolved
+          # commit of every submodule and the gfx coverage of each library, so a
+          # shipped artifact can be traced back to its inputs (#29).
+          python3 build_tools/generate_manifest.py \
+            --output build/staging/share/vision-pack/vision-pack-manifest.json \
+            --version "${VER}" \
+            --rocm-path "${ROCM_PATH}" \
+            --rocm-sdk "${VP_RESOLVED_SDK:-}" \
+            --build-type "${CMAKE_BUILD_TYPE}" \
+            --release-type "${{ inputs.release_type || 'ci' }}" \
+            --staging-dir build/staging
           echo "Version: ${VER}  Artifact: ${ARTIFACT}"
 
       # Pack the staging tree before uploading. actions/upload-artifact stores
@@ -622,11 +634,14 @@ jobs:
           - lib: rocpydecode
 
     steps:
+      # The test legs build from the *installed* tree, so the only thing they
+      # need from the repo is build_tools/fetch_rocm_sdk.py. Cloning the
+      # submodules and full history here pulled protobuf, libjpeg-turbo and
+      # friends once per matrix leg for nothing.
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install extra build tools
         run: |
@@ -765,6 +780,27 @@ jobs:
       # Python import smoke test (#22). CTest can pass while the pybind module
       # is broken (unresolved symbol from a bad link surfaces only at import).
       # A linkage failure (ImportError / undefined symbol) is a real bug and
+      # rocCV ships a real package config, and that config calls
+      # find_dependency(HIP). It can only be resolved where the SDK is present,
+      # so the downstream find_package test for it belongs here rather than in
+      # package.yml's findpackage-test, which runs without ROCm on purpose.
+      - name: Downstream find_package(roccv)
+        if: matrix.lib == 'roccv'
+        run: |
+          set -eu
+          WORK="$(mktemp -d)"
+          cat > "${WORK}/CMakeLists.txt" <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(vp_roccv_findpackage LANGUAGES CXX)
+          find_package(roccv REQUIRED CONFIG)
+          message(STATUS "roccv_FOUND=${roccv_FOUND}")
+          message(STATUS "roccv_DIR=${roccv_DIR}")
+          CMAKE
+          cmake -S "${WORK}" -B "${WORK}/build" \
+            -DROCM_PATH="${ROCM_PATH}" \
+            "-DCMAKE_PREFIX_PATH=${ROCM_PATH};${ROCM_PATH}/lib/cmake;${ROCM_PATH}/lib/llvm"
+          echo "find_package(roccv CONFIG) resolved against the installed tree: OK"
+
       # fails the leg; a GPU-runtime failure (no device on this CPU runner) is
       # tolerated. rocpydecode is newly enabled and upstream-blocked on
       # rocPyDecode#290 (Development.Embed on manylinux), so its import runs in

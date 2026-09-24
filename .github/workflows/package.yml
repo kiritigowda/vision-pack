@@ -432,6 +432,40 @@ jobs:
             2>/dev/null || echo "Release upload skipped (no packages)"
 
   # ---------------------------------------------------------------------------
+  # Per-package validation.
+  #
+  # Walks every produced DEB one at a time, printing its control metadata
+  # (dpkg -I) and payload listing (dpkg -c), then checking the things that have
+  # actually broken before: missing payload, paths escaping /opt/rocm, flattened
+  # SONAME chains, non-executable binaries, un-isolated bundled SONAMEs and
+  # incomplete control fields. Kept as a separate stage so a packaging fault is
+  # reported independently of the runtime smoke tests.
+  # ---------------------------------------------------------------------------
+  validate-packages:
+    needs: package
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:24.04
+      options: --user root
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dpkg tools
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends dpkg-dev
+
+      - name: Download DEB artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: vision-pack-deb-${{ needs.package.outputs.version }}-${{ needs.package.outputs.build_id }}
+          path: debs/
+
+      - name: Validate every package
+        run: bash build_tools/validate_packages.sh debs
+
+  # ---------------------------------------------------------------------------
   # Clean-runner package-install smoke test (#4).
   #
   # Installs the produced runtime DEBs on a pristine ubuntu:24.04 (no build
@@ -488,7 +522,7 @@ jobs:
           # rocal/roccv/mivisionx carry external ROCm depends (rpp/hip/decode/
           # jpeg) not present on a bare runner; force-install the payloads so we
           # can inspect the shipped .so files for isolation.
-          for comp in mivisionx roccv rocal; do
+          for comp in mivisionx roccv rocal rocpydecode; do
             f="$(deb "$comp")"
             [ -n "$f" ] && dpkg --force-depends -i "$f"
           done
@@ -499,6 +533,31 @@ jobs:
         run: |
           set -eu
           FAIL=0
+          # Check every shipped library, not just librocal: any of them could
+          # pick up a bundled dep, and a stock SONAME on any one of them is
+          # exactly what a host copy could shadow.
+          echo "=== every shipped .so references only isolated SONAMEs ==="
+          CHECKED=0
+          for LIB in /opt/rocm/lib/*.so*; do
+            { [ -f "${LIB}" ] && [ ! -L "${LIB}" ]; } || continue
+            CHECKED=$((CHECKED + 1))
+            N="$(readelf -d "${LIB}" 2>/dev/null | grep -i NEEDED || true)"
+            STOCK="$(echo "${N}" \
+              | grep -Ei "lib(protobuf|protobuf-lite|turbojpeg|jpeg|lmdb|sndfile)\.so" \
+              | grep -iv "rocm-vision" || true)"
+            if [ -n "${STOCK}" ]; then
+              echo "  ERROR: $(basename "${LIB}") references a stock bundled SONAME:"
+              echo "${STOCK}" | sed 's/^/      /'
+              FAIL=1
+            else
+              echo "  $(basename "${LIB}"): OK"
+            fi
+          done
+          if [ "${CHECKED}" -eq 0 ]; then
+            echo "ERROR: no libraries found under /opt/rocm/lib to check"; exit 1
+          fi
+          echo "  ${CHECKED} librar(ies) checked"
+
           LIB=/opt/rocm/lib/librocal.so
           if [ ! -e "$LIB" ]; then
             echo "ERROR: $LIB not installed"; exit 1
@@ -506,12 +565,6 @@ jobs:
           echo "=== librocal.so NEEDED ==="
           NEEDED="$(readelf -d "$LIB" | grep -i NEEDED || true)"
           echo "${NEEDED}"
-          # Every bundled-dep reference must be a private *-rocm-vision SONAME.
-          if echo "${NEEDED}" \
-              | grep -Ei "lib(protobuf|protobuf-lite|turbojpeg|jpeg|lmdb|sndfile)\.so" \
-              | grep -qiv "rocm-vision"; then
-            echo "ERROR: librocal.so references a stock bundled SONAME"; FAIL=1
-          fi
           if ! echo "${NEEDED}" | grep -qi "libprotobuf-rocm-vision"; then
             echo "ERROR: librocal.so missing isolated protobuf NEEDED"; FAIL=1
           fi
@@ -560,6 +613,22 @@ jobs:
             exit 1
           fi
           echo "  ${PLANTED} stock soname(s) present"
+          # Resolve every shipped library, not just librocal. ldd cannot fully
+          # resolve them here (hip/rpp are absent by design), but the bundled
+          # deps must still bind to rocm_sysdeps rather than the planted copies.
+          echo "=== isolated deps resolve to rocm_sysdeps for every library ==="
+          for L in /opt/rocm/lib/*.so*; do
+            { [ -f "${L}" ] && [ ! -L "${L}" ]; } || continue
+            OUT="$(ldd "${L}" 2>/dev/null | grep -i 'rocm-vision' || true)"
+            [ -n "${OUT}" ] || continue
+            OUTSIDE="$(echo "${OUT}" | grep -v 'rocm_sysdeps/lib' || true)"
+            if [ -n "${OUTSIDE}" ]; then
+              echo "  ERROR: $(basename "${L}") resolved an isolated dep outside rocm_sysdeps:"
+              echo "${OUTSIDE}" | sed 's/^/      /'
+              exit 1
+            fi
+            echo "  $(basename "${L}"): $(echo "${OUT}" | grep -c .) isolated dep(s) from rocm_sysdeps"
+          done
           echo "=== ldd librocal.so (bundled-dep lines) ==="
           LDD="$(ldd /opt/rocm/lib/librocal.so || true)"
           echo "${LDD}" | grep -Ei "rocm-vision|protobuf|turbojpeg|jpeg|lmdb|sndfile" || true
@@ -627,12 +696,15 @@ jobs:
           # counterparts pull external ROCm deps not present here, so force-
           # install payloads to lay down the files we need to discover.
           deb() { find debs -name "amdrocm-vision-*-Linux-$1.deb" | head -1; }
-          for comp in rocm-sysdeps-vision mivisionx mivisionx-dev rocal rocal-dev; do
+          for comp in rocm-sysdeps-vision mivisionx mivisionx-dev rocal rocal-dev \
+                      roccv roccv-dev; do
             f="$(deb "$comp")"
             [ -n "$f" ] && sudo dpkg --force-depends -i "$f" || echo "(skip $comp)"
           done
           echo "=== installed cmake shims ==="
           ls -la /opt/rocm/lib/cmake/Find*.cmake
+          echo "=== installed package configs ==="
+          find /opt/rocm/lib/cmake -name '*Config.cmake' | sed 's/^/  /'
 
       - name: Configure a downstream project against the shims
         run: |
@@ -652,3 +724,19 @@ jobs:
           echo "=== configuring downstream find_package project ==="
           cmake -S "${WORK}" -B "${WORK}/build" -DROCM_PATH=/opt/rocm
           echo "find_package(MIVisionX) and find_package(rocal) resolved: OK"
+
+      # rocCV ships a real config package rather than a shim, and that config
+      # calls find_dependency(HIP). This runner has no ROCm by design, so the
+      # most that can be checked here is that the package config is installed
+      # where CMake would look for it. The configure-time test that actually
+      # resolves it runs in build.yml's roccv leg, which has the SDK.
+      - name: Assert rocCV ships a discoverable package config
+        run: |
+          set -eu
+          CFG=/opt/rocm/lib/cmake/roccv/roccvConfig.cmake
+          if [ ! -f "${CFG}" ]; then
+            echo "ERROR: ${CFG} not installed by amdrocm-roccv-devel"; exit 1
+          fi
+          echo "  ${CFG}: present"
+          echo "  declared dependencies:"
+          grep -E 'find_dependency|find_package' "${CFG}" | sed 's/^/    /' || true
