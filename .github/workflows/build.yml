@@ -182,7 +182,14 @@ jobs:
             ARGS="${ARGS} --gpu-family ${FAMILY}"
             [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
           fi
-          python3 build_tools/fetch_rocm_sdk.py ${ARGS}
+          python3 build_tools/fetch_rocm_sdk.py ${ARGS} > /tmp/sdk-fetch.log 2>&1 \
+            || { cat /tmp/sdk-fetch.log; exit 1; }
+          cat /tmp/sdk-fetch.log
+          # Record which tarball was actually resolved. "latest" moves, so
+          # without this a nightly that breaks cannot be reproduced (#29).
+          RESOLVED="$(sed -n 's/^Selected[^:]*: //p' /tmp/sdk-fetch.log | head -1)"
+          echo "VP_RESOLVED_SDK=${RESOLVED}" >> "$GITHUB_ENV"
+          echo "Resolved SDK: ${RESOLVED:-<unknown>}"
           echo "SDK cmake packages available:"
           ls "${ROCM_PATH}/lib/cmake/" | head -30
 
@@ -547,12 +554,17 @@ jobs:
           echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
           # Manifest lives under share/vision-pack/ (a proper ROCm subdir), not
           # the staging root — otherwise the dist tarball drops it straight into
-          # /opt/rocm/vision-pack-manifest.json (#37).
-          mkdir -p build/staging/share/vision-pack
-          printf '{"version":"%s","sha":"%s","rocm_path":"%s","build_type":"%s","release_type":"%s"}\n' \
-            "${VER}" "${SHA}" "${ROCM_PATH}" "${CMAKE_BUILD_TYPE}" \
-            "${{ inputs.release_type || 'ci' }}" \
-            > build/staging/share/vision-pack/vision-pack-manifest.json
+          # /opt/rocm/vision-pack-manifest.json (#37). It records the resolved
+          # commit of every submodule and the gfx coverage of each library, so a
+          # shipped artifact can be traced back to its inputs (#29).
+          python3 build_tools/generate_manifest.py \
+            --output build/staging/share/vision-pack/vision-pack-manifest.json \
+            --version "${VER}" \
+            --rocm-path "${ROCM_PATH}" \
+            --rocm-sdk "${VP_RESOLVED_SDK:-}" \
+            --build-type "${CMAKE_BUILD_TYPE}" \
+            --release-type "${{ inputs.release_type || 'ci' }}" \
+            --staging-dir build/staging
           echo "Version: ${VER}  Artifact: ${ARTIFACT}"
 
       # Pack the staging tree before uploading. actions/upload-artifact stores
@@ -622,11 +634,14 @@ jobs:
           - lib: rocpydecode
 
     steps:
+      # The test legs build from the *installed* tree, so the only thing they
+      # need from the repo is build_tools/fetch_rocm_sdk.py. Cloning the
+      # submodules and full history here pulled protobuf, libjpeg-turbo and
+      # friends once per matrix leg for nothing.
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install extra build tools
         run: |
