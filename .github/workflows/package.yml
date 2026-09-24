@@ -75,6 +75,10 @@ jobs:
           apt-get install -y --no-install-recommends \
             cmake dpkg-dev debhelper equivs rpm createrepo-c \
             patchelf python3 curl jq git
+          # This job also runs as root against a checkout owned by the runner
+          # user; without this git refuses to read the repository and the
+          # version lookup below can never resolve a tag.
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Download staged artifacts
         uses: actions/download-artifact@v8
@@ -208,10 +212,9 @@ jobs:
               echo "${STRAY}" | sed 's/^/    /'
               FAIL=1
             fi
-            # A Debian version must begin with a digit. The build currently
-            # derives it from `git describe --tags --always`, which returns a
-            # bare commit sha when the repo has no tags, so this is a warning
-            # until the project is tagged.
+            # A Debian version must begin with a digit. Warn rather than fail:
+            # the version is supplied by the caller, so this is a guard against
+            # a bad value reaching the packages, not a build-local invariant.
             case "${VER}" in
               [0-9]*) ;;
               *) echo "::warning::${PKG} version '${VER}' does not start with a digit; dependency expressions referencing it cannot be satisfied" ;;

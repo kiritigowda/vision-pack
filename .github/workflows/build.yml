@@ -119,6 +119,14 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
+      # The job runs as root inside the container while the checkout is owned
+      # by the runner user, so git refuses to operate on it at all. That had
+      # been masked by `2>/dev/null || echo` fallbacks around the version
+      # lookup, which meant a tag would never be found even once the project
+      # is tagged.
+      - name: Trust the workspace checkout
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
       # TheRock's manylinux image has gcc-toolset-13, cmake 3.27, ninja,
       # Python 3.12 interpreter. We additionally need:
       #   python3-devel — Python.h headers for rocCV/rocAL pybind11 builds
