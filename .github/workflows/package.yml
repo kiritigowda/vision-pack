@@ -172,11 +172,107 @@ jobs:
             done
           fi
 
+      - name: Inspect DEB metadata and payload
+        working-directory: pkg-build
+        run: |
+          set -u
+          FAIL=0
+          for DEB in *.deb; do
+            [ -f "${DEB}" ] || continue
+            echo "=================================================================="
+            echo "### ${DEB}"
+            echo "--- control (dpkg-deb --info) ---"
+            dpkg-deb --field "${DEB}" \
+              Package Version Architecture Section Priority Installed-Size \
+              Maintainer Homepage Depends
+            echo "--- payload (dpkg-deb --contents) ---"
+            CONTENTS="$(dpkg-deb --contents "${DEB}")"
+            echo "${CONTENTS}" | awk 'NF>=6 && $1 !~ /^d/ {print}' | head -25
+            FILES="$(echo "${CONTENTS}" | awk '$1 !~ /^d/' | wc -l)"
+            LINKS="$(echo "${CONTENTS}" | awk '$1 ~ /^l/' | wc -l)"
+            echo "--- summary: ${FILES} file(s), ${LINKS} symlink(s) ---"
+
+            PKG="$(dpkg-deb --field "${DEB}" Package)"
+            # Not fatal: rocpydecode is built best-effort, so its packages are
+            # legitimately empty when that build was dropped.
+            [ "${FILES}" -eq 0 ] && echo "::warning::${PKG} contains no files"
+            VER="$(dpkg-deb --field "${DEB}" Version)"
+            # Every payload path must live under /opt/rocm. The one exception is
+            # the .pth, which only works from a real site directory.
+            # Field 6 is the path; $NF would be the link target on symlink lines.
+            STRAY="$(echo "${CONTENTS}" | awk '$1 !~ /^d/ {print $6}' \
+              | grep -v '^\./opt/rocm/' \
+              | grep -v '^\./usr/lib/python3/dist-packages/' || true)"
+            if [ -n "${STRAY}" ]; then
+              echo "  ERROR: ${PKG} ships paths outside /opt/rocm:"
+              echo "${STRAY}" | sed 's/^/    /'
+              FAIL=1
+            fi
+            # A Debian version must begin with a digit. The build currently
+            # derives it from `git describe --tags --always`, which returns a
+            # bare commit sha when the repo has no tags, so this is a warning
+            # until the project is tagged.
+            case "${VER}" in
+              [0-9]*) ;;
+              *) echo "::warning::${PKG} version '${VER}' does not start with a digit; dependency expressions referencing it cannot be satisfied" ;;
+            esac
+          done
+
+          echo "=================================================================="
+          echo "### declared dependency graph"
+          for DEB in *.deb; do
+            [ -f "${DEB}" ] || continue
+            printf '%-34s -> %s\n' \
+              "$(dpkg-deb --field "${DEB}" Package)" \
+              "$(dpkg-deb --field "${DEB}" Depends)"
+          done
+
+          # amdrocm-rocal links libopenvx/libvx_rpp, so it must pull MIVisionX in.
+          ROCAL_DEB=""
+          for d in *.deb; do
+            if [ "$(dpkg-deb --field "$d" Package)" = "amdrocm-rocal" ]; then
+              ROCAL_DEB="$d"
+              break
+            fi
+          done
+          if [ -n "${ROCAL_DEB:-}" ]; then
+            DEPS="$(dpkg-deb --field "${ROCAL_DEB}" Depends)"
+            for REQ in amdrocm-mivisionx amdrocm-vision-sysdeps amdrocm-vision-pythonpath; do
+              if echo "${DEPS}" | grep -q "${REQ}"; then
+                echo "  amdrocm-rocal depends on ${REQ}: OK"
+              else
+                echo "  ERROR: amdrocm-rocal is missing a dependency on ${REQ}"
+                FAIL=1
+              fi
+            done
+          else
+            echo "::warning::amdrocm-rocal .deb not found; dependency check skipped"
+          fi
+          [ "${FAIL}" -eq 0 ] || { echo "DEB inspection failed"; exit 1; }
+
       - name: Generate RPM packages
         working-directory: pkg-build
         run: |
           cpack -G RPM --verbose
           ls -lh *.rpm 2>/dev/null || echo "No .rpm files produced"
+
+      - name: Inspect RPM metadata and payload
+        working-directory: pkg-build
+        run: |
+          set -u
+          command -v rpm >/dev/null 2>&1 || { echo "rpm not available"; exit 0; }
+          for RPMF in *.rpm; do
+            [ -f "${RPMF}" ] || continue
+            echo "=================================================================="
+            echo "### ${RPMF}"
+            rpm -qp --queryformat \
+              'Name:     %{NAME}\nVersion:  %{VERSION}-%{RELEASE}\nArch:     %{ARCH}\nLicense:  %{LICENSE}\nSize:     %{SIZE}\nSummary:  %{SUMMARY}\n' \
+              "${RPMF}" 2>/dev/null || true
+            echo "--- requires ---"
+            rpm -qp --requires "${RPMF}" 2>/dev/null | grep -v '^rpmlib(' | sed 's/^/  /' || true
+            echo "--- payload (first 15) ---"
+            rpm -qp --list "${RPMF}" 2>/dev/null | head -15 | sed 's/^/  /' || true
+          done
 
       - name: Generate multiarch tarball
         run: |

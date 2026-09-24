@@ -520,8 +520,18 @@ jobs:
       - name: Collect build metadata
         id: meta
         run: |
-          VER=$(git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")
+          # Deliberately no --always: with no tags in the repo it would return a
+          # bare commit sha as the package version, which is not a meaningful
+          # version to compare and makes the inter-package Depends
+          # unsatisfiable. Let describe fail instead and derive the version from
+          # the declared project version, keeping the commit as build metadata.
+          VER="$(git describe --tags --dirty 2>/dev/null || true)"
           VER="${VER#v}"
+          if [ -z "${VER}" ]; then
+            PROJ_VER="$(sed -n 's/^ *VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)"
+            VER="${PROJ_VER:-0.1.0}+g$(git rev-parse --short HEAD)"
+            echo "::notice::no tag found; derived package version ${VER}"
+          fi
           SHA="${{ github.sha }}"
           SHORT="${SHA:0:8}"
           ARTIFACT="vision-pack-staged-multiarch-${SHORT}"
