@@ -45,6 +45,29 @@ is_best_effort() {
   case "$1" in amdrocm-pydecode|amdrocm-pydecode-test) return 0 ;; *) return 1 ;; esac
 }
 
+# The equivs meta-packages are a different shape from the CPack ones: they
+# deliberately carry no payload, and equivs always emits the three standard
+# Debian doc files under /usr/share/doc. Their value is entirely in what they
+# pull in, so that is what gets checked.
+is_meta() {
+  case "$1" in
+    amdrocm-vision|amdrocm-vision-sdk|amdrocm-vision-tests) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+expected_meta_depends() {
+  case "$1" in
+    amdrocm-vision)
+      echo 'amdrocm-mivisionx amdrocm-rocal amdrocm-roccv amdrocm-pydecode' ;;
+    amdrocm-vision-sdk)
+      echo 'amdrocm-vision amdrocm-mivisionx-devel amdrocm-rocal-devel amdrocm-roccv-devel' ;;
+    amdrocm-vision-tests)
+      echo 'amdrocm-vision-sdk amdrocm-mivisionx-test amdrocm-rocal-test amdrocm-roccv-test amdrocm-pydecode-test' ;;
+    *) echo '' ;;
+  esac
+}
+
 # Packages that legitimately declare no dependencies.
 declares_no_deps_ok() {
   case "$1" in amdrocm-vision-sysdeps|amdrocm-vision-pythonpath) return 0 ;; *) return 1 ;; esac
@@ -90,6 +113,37 @@ check_package() {
   esac
   if [ -z "$deps" ] && ! declares_no_deps_ok "$pkg"; then
     echo "  ERROR: ${pkg} declares no dependencies"; fail=1
+  fi
+
+  # --- meta-packages ---------------------------------------------------------
+  # No payload of their own; what matters is that they pull in the right set.
+  if is_meta "$pkg"; then
+    local unexpected want_dep
+    unexpected="$(echo "$paths" | grep -v '^\./usr/share/doc/' || true)"
+    if [ -n "$unexpected" ]; then
+      echo "  ERROR: meta-package ships files beyond /usr/share/doc:"
+      echo "$unexpected" | sed 's/^/      /'; fail=1
+    else
+      echo "  carries no payload beyond /usr/share/doc: OK"
+    fi
+    for want_dep in $(expected_meta_depends "$pkg"); do
+      # Match on a word boundary so amdrocm-vision does not satisfy a check
+      # for amdrocm-vision-sdk.
+      if echo "$deps" | grep -qE "(^|[, ])${want_dep}( |,|\(|$)"; then
+        echo "  pulls in ${want_dep}: OK"
+      else
+        echo "  ERROR: ${pkg} does not depend on ${want_dep}"; fail=1
+      fi
+    done
+    if [ "$fail" -eq 0 ]; then
+      echo "  => ${pkg}: PASS"
+      SUMMARY="${SUMMARY}  PASS  ${pkg} (meta, $(echo "$deps" | tr ',' '\n' | grep -c .) deps)\n"
+    else
+      echo "  => ${pkg}: FAIL"
+      SUMMARY="${SUMMARY}  FAIL  ${pkg} (meta)\n"
+      FAILED="${FAILED} ${pkg}"
+    fi
+    return "$fail"
   fi
 
   # --- install-path containment ---------------------------------------------
