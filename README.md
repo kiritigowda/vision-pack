@@ -466,12 +466,11 @@ Workarounds live in vision-pack, not in the submodules.
   `rewrite_sonames.py` is what actually corrects it
   ([#45](https://github.com/kiritigowda/vision-pack/issues/45)).
 
-- **MIVisionX `hip_cu_mask_tests` not installed upstream** — the test suite
-  registers `openvx_hip_cu_mask_remap_4K` but never `install()`s
-  `tests/hip_cu_mask_tests/`. vision-pack copies that directory into the
-  staged test tree so `amdrocm-mivisionx-test` is self-consistent
-  ([#42](https://github.com/kiritigowda/vision-pack/issues/42)). Remove the
-  copy once MIVisionX ships the matching `install()` rule.
+- **MIVisionX `hip_cu_mask_tests` not installed** — the test suite registers
+  `openvx_hip_cu_mask_remap_4K` but the `test` component did not ship the
+  script. Fix is upstream:
+  [MIVisionX#1766](https://github.com/ROCm/MIVisionX/pull/1766)
+  ([#42](https://github.com/kiritigowda/vision-pack/issues/42)).
 
 - **rocPyDecode `Development.Embed`** — upstream
   `find_package(Python3 Development)` needs `libpython.so`. manylinux's default

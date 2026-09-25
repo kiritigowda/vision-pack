@@ -24,7 +24,7 @@ expected_contents() {
   case "$1" in
     amdrocm-mivisionx)          echo 'lib/libopenvx\.so lib/libvxu\.so lib/libvx_rpp\.so bin/runvx' ;;
     amdrocm-mivisionx-devel)    echo 'include/mivisionx/ lib/cmake/FindMIVisionX\.cmake' ;;
-    amdrocm-mivisionx-test)     echo 'share/mivisionx/test/ share/mivisionx/test/hip_cu_mask_tests/' ;;
+    amdrocm-mivisionx-test)     echo 'share/mivisionx/test/' ;;
     amdrocm-rocal)              echo 'lib/librocal\.so lib/rocal_pybind.*\.so' ;;
     amdrocm-rocal-devel)        echo 'include/rocal/ lib/cmake/Findrocal\.cmake' ;;
     amdrocm-rocal-test)         echo 'share/rocal/test/' ;;

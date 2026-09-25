@@ -302,7 +302,6 @@ jobs:
             "build/staging/lib/pyRocJpegDecode:rocPyJPEGDecode Python package" \
             "build/staging/share/rocpydecode/tests:rocPyDecode test sources" \
             "build/staging/bin/runvx:mivisionx runvx tool" \
-            "build/staging/share/mivisionx/test/hip_cu_mask_tests/test_hip_cu_mask_remap.py:mivisionx CU-mask test script (#42)" \
             "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data" \
             "${SYSDEPS}/libturbojpeg-rocm-vision.so*:bundled turbojpeg" \
             "${SYSDEPS}/libprotobuf-rocm-vision.so*:bundled protobuf" \

@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- `amdrocm-mivisionx-test` now ships `hip_cu_mask_tests/`, so
-  `openvx_hip_cu_mask_remap_4K` has the script it registers (#42).
-
 ### Changed
 - rocAL finds the staged MIVisionX via `MIVisionX_PATH` instead of hard-coded
   library paths (#9).
