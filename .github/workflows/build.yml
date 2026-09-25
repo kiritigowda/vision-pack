@@ -621,6 +621,10 @@ jobs:
           - lib: rocpydecode
 
     steps:
+      # The test legs build from the *installed* tree, so the only thing they
+      # need from the repo is build_tools/fetch_rocm_sdk.py. Cloning the
+      # submodules and full history here pulled protobuf, libjpeg-turbo and
+      # friends once per matrix leg for nothing.
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
