@@ -1,0 +1,26 @@
+Name: amdrocm-vision
+Version: @VP_VER@
+Release: @VISION_PACK_BUILD_ID@
+Summary: AMD ROCm Computer Vision extension pack (runtime meta-package)
+License: MIT
+URL: https://github.com/kiritigowda/vision-pack
+Group: Development/Libraries
+BuildArch: noarch
+AutoReqProv: no
+Requires: amdrocm-mivisionx >= @VP_VER@, amdrocm-rocal >= @VP_VER@, amdrocm-roccv >= @VP_VER@, amdrocm-pydecode >= @VP_VER@
+
+%description
+Installs MIVisionX, rocAL, rocCV, and rocPyDecode runtime libraries.
+This is a convenience meta-package — it carries no files of its own.
+
+%prep
+
+%build
+
+%install
+mkdir -p %{buildroot}/usr/share/doc/%{name}
+printf 'AMD ROCm vision runtime meta-package — no payload.\n' \
+  > %{buildroot}/usr/share/doc/%{name}/README
+
+%files
+/usr/share/doc/%{name}/README

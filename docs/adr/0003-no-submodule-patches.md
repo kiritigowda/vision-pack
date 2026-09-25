@@ -29,6 +29,6 @@ Upstream vision libraries (MIVisionX, rocAL, rocCV, rocPyDecode) evolve independ
 - Post-build passes (patchelf) are fragile and platform-dependent.
 
 ## References
-- `CONTRIBUTING.md` — core rule documentation
+- [README.md](../../README.md) — product is packages and the dist tarball
 - `cmake/vision_pack_bundled_dep.cmake` — provide_* macros
 - `cmake/shims/` — finder shims

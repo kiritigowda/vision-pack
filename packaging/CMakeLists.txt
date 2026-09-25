@@ -24,7 +24,7 @@ cmake_minimum_required(VERSION 3.21)
 project(vision-pack-cpack NONE)
 
 if(NOT DEFINED VISION_PACK_VERSION)
-  set(VISION_PACK_VERSION "0.1.0" CACHE STRING "Package version")
+  set(VISION_PACK_VERSION "0.2.0" CACHE STRING "Package version")
 endif()
 if(NOT DEFINED VISION_PACK_ROCM_VERSION)
   set(VISION_PACK_ROCM_VERSION "10.2.0" CACHE STRING "ROCm SDK version")
@@ -123,6 +123,7 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/shims/FindMIVisionX.cmake"
 )
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/mivisionx"
     DESTINATION share COMPONENT mivisionx-dev OPTIONAL
+    PATTERN test EXCLUDE
 )
 # --- MIVisionX test ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/mivisionx/test"
@@ -187,9 +188,6 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/roccv/test"
 # (rocPyDecode#285), so we can't rely on component-filtered installs. Instead we
 # split by PATH here at the packaging layer: runtime .so's → rocpydecode, and
 # share/rocpydecode/tests → rocpydecode-test (below). No submodule patch needed.
-# rocpydecode is built best-effort in CI (upstream-blocked on rocPyDecode#290);
-# if its build is skipped these globs match nothing and the component packages
-# empty rather than failing.
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/"
     DESTINATION lib COMPONENT rocpydecode
     FILES_MATCHING
@@ -203,7 +201,7 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpydecode/tests"
     DESTINATION share/rocpydecode COMPONENT rocpydecode-test OPTIONAL
 )
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpyjpegdecode/tests"
-    DESTINATION share/rocpydecode COMPONENT rocpydecode-test OPTIONAL
+    DESTINATION share/rocpyjpegdecode COMPONENT rocpydecode-test OPTIONAL
 )
 
 # --- Bundled runtime deps → lib/rocm_sysdeps/lib/ (same as ROCm sysdeps) ---
@@ -230,6 +228,8 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/"
 # we install it to the host's absolute dist-packages, not under /opt/rocm. One
 # dedicated component owns the file so the three runtime packages can each
 # depend on it without a dpkg file-overwrite conflict.
+# Debian/Ubuntu read dist-packages. RPM sitelib is not that path — the RPM
+# %post (pythonpath.postin) writes the same .pth into python3's site-packages.
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/python/amdrocm-vision.pth"
     DESTINATION /usr/lib/python3/dist-packages
     COMPONENT pythonpath
@@ -243,7 +243,7 @@ set(CPACK_DEBIAN_PACKAGE_RELEASE    "${VISION_PACK_BUILD_ID}")
 set(CPACK_DEBIAN_PACKAGE_SECTION    "devel")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY   "optional")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "ROCm Engineering <rocm-support@amd.com>")
-set(CPACK_DEBIAN_PACKAGE_HOMEPAGE   "https://github.com/ROCm/vision-pack")
+set(CPACK_DEBIAN_PACKAGE_HOMEPAGE   "https://github.com/kiritigowda/vision-pack")
 
 set(CPACK_DEBIAN_MIVISIONX_PACKAGE_NAME            "amdrocm-mivisionx")
 set(CPACK_DEBIAN_MIVISIONX-DEV_PACKAGE_NAME        "amdrocm-mivisionx-devel")
@@ -296,7 +296,7 @@ set(CPACK_RPM_COMPONENT_INSTALL ON)
 set(CPACK_RPM_PACKAGE_RELEASE   "${VISION_PACK_BUILD_ID}")
 set(CPACK_RPM_PACKAGE_GROUP     "Development/Libraries")
 set(CPACK_RPM_PACKAGE_LICENSE   "MIT")
-set(CPACK_RPM_PACKAGE_URL       "https://github.com/ROCm/vision-pack")
+set(CPACK_RPM_PACKAGE_URL       "https://github.com/kiritigowda/vision-pack")
 
 set(CPACK_RPM_MIVISIONX_PACKAGE_NAME            "amdrocm-mivisionx")
 set(CPACK_RPM_MIVISIONX-DEV_PACKAGE_NAME        "amdrocm-mivisionx-devel")
@@ -311,6 +311,9 @@ set(CPACK_RPM_ROCPYDECODE_PACKAGE_NAME          "amdrocm-pydecode")
 set(CPACK_RPM_ROCPYDECODE-TEST_PACKAGE_NAME     "amdrocm-pydecode-test")
 set(CPACK_RPM_ROCM-SYSDEPS-VISION_PACKAGE_NAME  "amdrocm-vision-sysdeps")
 set(CPACK_RPM_PYTHONPATH_PACKAGE_NAME           "amdrocm-vision-pythonpath")
+set(CPACK_RPM_PYTHONPATH_PACKAGE_REQUIRES       "python3")
+set(CPACK_RPM_PYTHONPATH_POST_INSTALL_SCRIPT_FILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/rpm/pythonpath.postin")
 
 # Requires mirror the DEB Depends above. Without them the RPMs declared no
 # dependencies at all and would install onto a host with no ROCm present.
@@ -346,28 +349,59 @@ set(CPACK_TGZ_COMPONENT_INSTALL ON)
 include(CPack)
 
 # ---------------------------------------------------------------------------
-# Meta-packages via equivs (amdrocm-vision, amdrocm-vision-sdk, etc.)
+# Meta-packages: DEB via equivs, RPM via rpmbuild
 # ---------------------------------------------------------------------------
+set(_vision_metas amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests)
+foreach(_meta ${_vision_metas})
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/meta/${_meta}.control.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/meta/${_meta}.control"
+    @ONLY
+  )
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/meta/${_meta}.spec.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/meta/${_meta}.spec"
+    @ONLY
+  )
+endforeach()
+
 find_program(EQUIVS_BUILD equivs-build)
+find_program(RPMBUILD rpmbuild)
+
+set(_meta_build_cmds "")
 if(EQUIVS_BUILD)
   # equivs-build produces one .deb from the first Package: stanza of a control
-  # file, so each meta-package needs its own control file — a single multi-stanza
-  # file would only ever build amdrocm-vision.
-  set(_vision_meta_controls
-      amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests)
-  set(_meta_build_cmds "")
-  foreach(_meta ${_vision_meta_controls})
-    configure_file(
-      "${CMAKE_CURRENT_SOURCE_DIR}/meta/${_meta}.control.in"
-      "${CMAKE_CURRENT_BINARY_DIR}/meta/${_meta}.control"
-      @ONLY
-    )
+  # file, so each meta-package needs its own control file.
+  foreach(_meta ${_vision_metas})
     list(APPEND _meta_build_cmds
       COMMAND ${EQUIVS_BUILD} "${CMAKE_CURRENT_BINARY_DIR}/meta/${_meta}.control")
   endforeach()
+endif()
+if(RPMBUILD)
+  # rpmbuild writes <_topdir>/RPMS/noarch/*.rpm. Copy next to the control
+  # files so the packaging workflow can collect them with the component RPMs.
+  list(APPEND _meta_build_cmds
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      "${CMAKE_CURRENT_BINARY_DIR}/rpmbuild/BUILD"
+      "${CMAKE_CURRENT_BINARY_DIR}/rpmbuild/RPMS"
+      "${CMAKE_CURRENT_BINARY_DIR}/rpmbuild/SOURCES"
+      "${CMAKE_CURRENT_BINARY_DIR}/rpmbuild/SPECS"
+      "${CMAKE_CURRENT_BINARY_DIR}/rpmbuild/SRPMS")
+  foreach(_meta ${_vision_metas})
+    list(APPEND _meta_build_cmds
+      COMMAND ${RPMBUILD} -bb
+        --define "_topdir ${CMAKE_CURRENT_BINARY_DIR}/rpmbuild"
+        "${CMAKE_CURRENT_BINARY_DIR}/meta/${_meta}.spec")
+  endforeach()
+  list(APPEND _meta_build_cmds
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_CURRENT_BINARY_DIR}/rpmbuild/RPMS"
+      "${CMAKE_CURRENT_BINARY_DIR}/meta/rpms")
+endif()
+if(_meta_build_cmds)
   add_custom_target(package-meta-vision
     ${_meta_build_cmds}
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/meta"
-    COMMENT "Building amdrocm-vision, -sdk, -tests meta-packages"
+    COMMENT "Building amdrocm-vision, -sdk, -tests meta-packages (DEB/RPM)"
   )
 endif()

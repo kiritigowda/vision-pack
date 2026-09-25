@@ -1,28 +1,20 @@
 # vision-pack Documentation
 
-Welcome to the vision-pack documentation. This directory contains architecture decisions, design rationale, and developer guidance.
+Architecture decisions and developer guidance. The user-facing install and
+build guide is [README.md](../README.md).
 
 ## Quick links
 
 | Document | Purpose |
 |---|---|
-| [`../README.md`](../README.md) | User-facing build and install guide |
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | How to contribute code, add deps, or add vision libraries |
-| [`../GOVERNANCE.md`](../GOVERNANCE.md) | Maintainer model, labels, roadmap |
-| [`../SECURITY.md`](../SECURITY.md) | Vulnerability reporting |
+| [`../README.md`](../README.md) | Install, build, packages, layout |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | Release history |
 | [`adr/`](adr/) | Architecture Decision Records |
-| [`../CLAUDE.md`](../CLAUDE.md) | Developer cheat sheet for build/packaging internals |
+| [`../CLAUDE.md`](../CLAUDE.md) | Build/packaging internals for agents |
 
 ## For new contributors
 
-1. Read [CONTRIBUTING.md](../CONTRIBUTING.md) for the build setup and the "no submodule patches" rule.
-2. Read [GOVERNANCE.md](../GOVERNANCE.md) for the decision-making model.
-3. Browse [adr/](adr/) to understand why the project uses ExternalProject, bundled deps, SONAME isolation, etc.
-4. Check [CHANGELOG.md](../CHANGELOG.md) for what's changed recently.
-
-## For maintainers
-
-- Update `CHANGELOG.md` under `[Unreleased]` for every PR.
-- Add ADRs for significant architectural changes.
-- Keep [GOVERNANCE.md](../GOVERNANCE.md) roadmap up to date.
+1. Read [README.md](../README.md) for the product (packages + dist tarball) and how to build it.
+2. Read [ADR 0003](adr/0003-no-submodule-patches.md) — vision-library submodules are never patched.
+3. Browse [adr/](adr/) for ExternalProject, bundled deps, and SONAME isolation.
+4. Record user-facing changes under `[Unreleased]` in [CHANGELOG.md](../CHANGELOG.md).

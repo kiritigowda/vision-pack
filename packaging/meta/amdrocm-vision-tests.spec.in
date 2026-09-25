@@ -1,0 +1,25 @@
+Name: amdrocm-vision-tests
+Version: @VP_VER@
+Release: @VISION_PACK_BUILD_ID@
+Summary: AMD ROCm Computer Vision test suite meta-package
+License: MIT
+URL: https://github.com/kiritigowda/vision-pack
+Group: Development/Libraries
+BuildArch: noarch
+AutoReqProv: no
+Requires: amdrocm-vision-sdk >= @VP_VER@, amdrocm-mivisionx-test >= @VP_VER@, amdrocm-rocal-test >= @VP_VER@, amdrocm-roccv-test >= @VP_VER@, amdrocm-pydecode-test >= @VP_VER@
+
+%description
+Installs all vision library test suites and the SDK they depend on.
+
+%prep
+
+%build
+
+%install
+mkdir -p %{buildroot}/usr/share/doc/%{name}
+printf 'AMD ROCm vision tests meta-package — no payload.\n' \
+  > %{buildroot}/usr/share/doc/%{name}/README
+
+%files
+/usr/share/doc/%{name}/README

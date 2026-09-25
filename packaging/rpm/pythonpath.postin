@@ -1,0 +1,22 @@
+# RPM %post for amdrocm-vision-pythonpath.
+# Debian reads /usr/lib/python3/dist-packages (CPack payload). RPM sitelib is
+# not that path, so write the same .pth into python3's site-packages here.
+python3 - <<'PY'
+import site
+from pathlib import Path
+
+text = "/opt/rocm/lib\n"
+errors = []
+for d in site.getsitepackages():
+    p = Path(d)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        (p / "amdrocm-vision.pth").write_text(text)
+        raise SystemExit(0)
+    except OSError as e:
+        errors.append(f"{p}: {e}")
+raise SystemExit(
+    "amdrocm-vision-pythonpath: no writable Python site-packages ("
+    + "; ".join(errors) + ")"
+)
+PY
