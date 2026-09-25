@@ -1,0 +1,26 @@
+Name: amdrocm-vision-sdk
+Version: @VP_VER@
+Release: @VISION_PACK_BUILD_ID@
+Summary: AMD ROCm Computer Vision SDK (development meta-package)
+License: MIT
+URL: https://github.com/kiritigowda/vision-pack
+Group: Development/Libraries
+BuildArch: noarch
+AutoReqProv: no
+Requires: amdrocm-vision >= @VP_VER@, amdrocm-mivisionx-devel >= @VP_VER@, amdrocm-rocal-devel >= @VP_VER@, amdrocm-roccv-devel >= @VP_VER@
+
+%description
+Installs all vision library runtime components plus development headers
+and cmake configs. Use this to build applications against the vision stack.
+
+%prep
+
+%build
+
+%install
+mkdir -p %{buildroot}/usr/share/doc/%{name}
+printf 'AMD ROCm vision SDK meta-package — no payload.\n' \
+  > %{buildroot}/usr/share/doc/%{name}/README
+
+%files
+/usr/share/doc/%{name}/README

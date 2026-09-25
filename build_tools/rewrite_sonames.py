@@ -274,6 +274,32 @@ def patch_consumers(root, sysdeps_dir, soname_map):
             print(f"  {consumer.name}: RPATH -> {':'.join(rpath_parts)}")
 
 
+def normalize_vision_lib_rpaths(root):
+    """Drop non-$ORIGIN RPATH entries from every staged vision library.
+
+    CMAKE_INSTALL_RPATH_USE_LINK_PATH=ON (or upstream -Wl,-rpath) bakes the
+    build-host ROCM_PATH into libopenvx/libroccv and friends. Consumers of
+    bundled sysdeps are handled in patch_consumers; this pass covers the rest
+    so nothing in lib/ ships an absolute RUNPATH.
+    """
+    libdir = root / "lib"
+    if not libdir.is_dir():
+        return
+    for so in sorted(p for p in libdir.glob("*.so*")
+                     if p.is_file() and not p.is_symlink()):
+        current = [p for p in _current_rpath(so).split(":") if p]
+        kept = [p for p in current if p.startswith("$ORIGIN")]
+        if kept == current:
+            continue
+        dropped = [p for p in current if not p.startswith("$ORIGIN")]
+        _run(["patchelf", "--set-rpath", ":".join(kept), str(so)])
+        print(f"  {so.name}: dropped non-relocatable RPATH {dropped}")
+        if kept:
+            print(f"  {so.name}: RPATH -> {':'.join(kept)}")
+        else:
+            print(f"  {so.name}: RPATH cleared")
+
+
 def verify(root, sysdeps_dir):
     """Fail on a stock bundled SONAME, or an RPATH that won't survive shipping."""
     ok = True
@@ -309,10 +335,16 @@ def verify(root, sysdeps_dir):
             print(f"  {s}")
         ok = False
 
-    # Bundled deps must be relocatable: no build-host paths, no empty
-    # tokens (#45).
-    for so in sorted(p for p in sysdeps_dir.glob("lib*.so*")
-                     if p.is_file() and not p.is_symlink()):
+    # Every staged ELF must be relocatable: no build-host paths, no empty
+    # tokens (#45). Bundled sysdeps and vision libs alike.
+    libdir = root / "lib"
+    staged = []
+    if libdir.is_dir():
+        staged.extend(p for p in libdir.glob("*.so*")
+                      if p.is_file() and not p.is_symlink())
+    staged.extend(p for p in sysdeps_dir.glob("lib*.so*")
+                  if p.is_file() and not p.is_symlink())
+    for so in sorted(set(staged)):
         bad = bad_rpath_entries(_current_rpath(so))
         if bad:
             print(f"ERROR: {so.name} has non-relocatable RPATH entries: {bad}")
@@ -346,6 +378,8 @@ def main():
     normalize_sysdep_rpaths(sysdeps_dir)
     print("[rewrite_sonames] patching consumers")
     patch_consumers(root, sysdeps_dir, soname_map)
+    print("[rewrite_sonames] normalizing vision library RPATHs")
+    normalize_vision_lib_rpaths(root)
 
     if not verify(root, sysdeps_dir):
         return 1

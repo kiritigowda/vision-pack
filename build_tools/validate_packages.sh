@@ -10,9 +10,7 @@
 #
 #   cpack -G DEB && build_tools/validate_packages.sh .
 #
-# Exits non-zero if any package fails a check. rocPyDecode is built
-# best-effort upstream (rocPyDecode#290), so its packages may legitimately be
-# empty; that is reported as a warning rather than a failure.
+# Exits non-zero if any package fails a check.
 set -u
 
 DEB_DIR="${1:-.}"
@@ -33,16 +31,12 @@ expected_contents() {
     amdrocm-roccv)              echo 'lib/libroccv\.so lib/rocpycv.*\.so' ;;
     amdrocm-roccv-devel)        echo 'include/roccv/ lib/cmake/roccv/' ;;
     amdrocm-roccv-test)         echo 'share/roccv/test/' ;;
+    amdrocm-pydecode)           echo 'lib/rocpydecode.*\.so lib/rocpyjpegdecode.*\.so lib/pyRocVideoDecode/ lib/pyRocJpegDecode/' ;;
+    amdrocm-pydecode-test)      echo 'share/rocpydecode/tests/ share/rocpyjpegdecode/tests/' ;;
     amdrocm-vision-sysdeps)     echo 'libturbojpeg-rocm-vision\.so libjpeg-rocm-vision\.so libprotobuf-rocm-vision\.so liblmdb-rocm-vision\.so libsndfile-rocm-vision\.so' ;;
     amdrocm-vision-pythonpath)  echo 'dist-packages/amdrocm-vision\.pth' ;;
     *)                          echo '' ;;
   esac
-}
-
-# Packages allowed to ship nothing: rocPyDecode is dropped from the build when
-# its upstream configure fails.
-is_best_effort() {
-  case "$1" in amdrocm-pydecode|amdrocm-pydecode-test) return 0 ;; *) return 1 ;; esac
 }
 
 # The equivs meta-packages are a different shape from the CPack ones: they
@@ -158,11 +152,7 @@ check_package() {
 
   # --- payload expectations --------------------------------------------------
   if [ "$files" -eq 0 ]; then
-    if is_best_effort "$pkg"; then
-      echo "  WARNING: ${pkg} is empty (rocPyDecode build dropped; best-effort)"
-    else
-      echo "  ERROR: ${pkg} ships no files"; fail=1
-    fi
+    echo "  ERROR: ${pkg} ships no files"; fail=1
   else
     local want
     for want in $(expected_contents "$pkg"); do
@@ -229,6 +219,48 @@ echo "Validating $(echo "$DEBS" | grep -c .) package(s) from ${DEB_DIR}"
 for deb in $DEBS; do
   check_package "$deb" || true
 done
+
+echo "------------------------------------------------------------------"
+echo "### cross-package checks"
+OVERLAP_FAIL=0
+HAS_PYDECODE=0
+HAS_PYDECODE_TEST=0
+# path -> owning package; a second owner is a dpkg overwrite on co-install.
+declare -A PATH_OWNER
+for deb in $DEBS; do
+  pkg="$(dpkg-deb --field "$deb" Package 2>/dev/null || echo '')"
+  [ -n "$pkg" ] || continue
+  [ "$pkg" = "amdrocm-pydecode" ] && HAS_PYDECODE=1
+  [ "$pkg" = "amdrocm-pydecode-test" ] && HAS_PYDECODE_TEST=1
+  is_meta "$pkg" && continue
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    prev="${PATH_OWNER[$p]:-}"
+    if [ -n "$prev" ] && [ "$prev" != "$pkg" ]; then
+      echo "  ERROR: $p ships in both $prev and $pkg"
+      OVERLAP_FAIL=1
+    else
+      PATH_OWNER[$p]="$pkg"
+    fi
+  done < <(dpkg-deb --contents "$deb" | awk '$1 !~ /^d/ {print $6}')
+done
+if [ "$OVERLAP_FAIL" -eq 0 ]; then
+  echo "  no overlapping payload paths: OK"
+else
+  FAILED="${FAILED} overlapping-paths"
+fi
+if [ "$HAS_PYDECODE" -eq 1 ]; then
+  echo "  amdrocm-pydecode produced: OK"
+else
+  echo "  ERROR: amdrocm-pydecode package was not produced"
+  FAILED="${FAILED} missing-pydecode"
+fi
+if [ "$HAS_PYDECODE_TEST" -eq 1 ]; then
+  echo "  amdrocm-pydecode-test produced: OK"
+else
+  echo "  ERROR: amdrocm-pydecode-test package was not produced"
+  FAILED="${FAILED} missing-pydecode-test"
+fi
 
 echo "=================================================================="
 echo "Package validation summary"

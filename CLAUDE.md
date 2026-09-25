@@ -19,8 +19,9 @@ OpenMP, `rocm_sysdeps`) and installs the vision libs **directly into `/opt/rocm`
 top-level directories — identical conventions to every other ROCm component.
 
 The end product is a set of DEB/RPM/TGZ packages (`amdrocm-mivisionx`, `amdrocm-rocal`,
-`amdrocm-roccv`, `amdrocm-rocpydecode`, `amdrocm-vision-sysdeps`, plus `-devel`/`-test` variants and
-`amdrocm-vision*` meta-packages).
+`amdrocm-roccv`, `amdrocm-pydecode`, `amdrocm-vision-sysdeps`, plus `-devel`/`-test` variants and
+`amdrocm-vision*` meta-packages). `amdrocm-pydecode` is required — a missing build
+or empty package fails CI rather than being omitted from the meta Depends.
 
 ## How the packaging actually works (the whole flow)
 
@@ -142,13 +143,17 @@ reintroduce the deb overlay.
 acquisition is now a single tarball fetch. The only remaining workaround is the shared-Python
 forwarding, which is an upstream fix to file — never patch submodules.
 
-## Build & test (local, on santiago)
+## Build & test (local)
 
 ```bash
 cmake -B build -S . -DROCM_PATH=/opt/rocm -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel $(nproc)
-sudo cmake --install build            # installs into /opt/rocm
 ```
+
+The product is packages and the dist tarball, not `cmake --install`. After
+the build, copy each `_subprojects/<lib>/stage` into `build/staging`, install
+the `runtime` component there, run `build_tools/rewrite_sonames.py`, then
+CPack from `packaging/` — see [README.md](README.md).
 
 Component flags: `-DVISION_PACK_ENABLE_{MIVISIONX,ROCAL,ROCCV,ROCPYDECODE}=OFF`.
 Bundling flags: `-DVISION_PACK_BUNDLE_{PYBIND11,DLPACK,RAPIDJSON,PROTOBUF,TURBOJPEG,LMDB,LIBSNDFILE}=OFF`

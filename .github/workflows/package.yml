@@ -1,7 +1,7 @@
 # vision-pack packaging workflow
 #
 # Consumes staged artifacts from build.yml and produces:
-#   - DEB packages  (amdrocm-mivisionx, -rocal, -roccv, -rocpydecode + variants)
+#   - DEB packages  (amdrocm-mivisionx, -rocal, -roccv, -pydecode + variants)
 #   - RPM packages  (same naming)
 #   - Tarball       (vision-pack-dist-linux-multiarch-<version>.tar.gz)
 #   - Meta-packages (amdrocm-vision, amdrocm-vision-sdk, amdrocm-vision-tests)
@@ -34,6 +34,16 @@ on:
         type: string
         required: false
         default: ''
+    outputs:
+      version:
+        description: 'Package version string'
+        value: ${{ jobs.package.outputs.version }}
+      build_id:
+        description: 'CI build ID / nightly date'
+        value: ${{ jobs.package.outputs.build_id }}
+      tarball_artifact:
+        description: 'Uploaded dist-tarball artifact name'
+        value: ${{ jobs.package.outputs.tarball_artifact }}
   workflow_dispatch:
     inputs:
       artifact_name:
@@ -65,6 +75,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       build_id: ${{ steps.version.outputs.build_id }}
+      tarball_artifact: ${{ steps.version.outputs.tarball_artifact }}
 
     steps:
       - uses: actions/checkout@v7
@@ -120,7 +131,7 @@ jobs:
           else
             VER=$(git describe --tags --abbrev=0 2>/dev/null \
               || jq -r '.version // empty' staging/share/vision-pack/vision-pack-manifest.json 2>/dev/null \
-              || echo "0.1.0")
+              || echo "0.2.0")
             VER="${VER#v}"
           fi
           # Build ID: use run_id for CI, date for nightly
@@ -131,6 +142,7 @@ jobs:
           fi
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "build_id=${BUILD_ID}" >> "$GITHUB_OUTPUT"
+          echo "tarball_artifact=vision-pack-tarball-${VER}-${BUILD_ID}" >> "$GITHUB_OUTPUT"
           echo "Package: ${VER}  Build: ${BUILD_ID}  Type: ${{ inputs.release_type }}"
 
       - name: Configure CPack
@@ -157,24 +169,24 @@ jobs:
           # The rocpydecode modules install to lib/ (CMAKE_INSTALL_LIBDIR=lib);
           # the packaging globs read from staging/lib/, so a regression that put
           # them back in lib64/ would silently ship an empty amdrocm-pydecode.
-          # Assert the .so payload is actually inside the package. Non-blocking:
-          # rocpydecode is best-effort (#290), so if the whole build was dropped
-          # the package is legitimately absent — only warn, never fail here.
           echo "=== amdrocm-pydecode contents ==="
           PYDECODE_DEB=$(ls amdrocm-*-rocpydecode.deb 2>/dev/null | head -1)
           if [ -z "${PYDECODE_DEB}" ]; then
-            echo "::warning::no rocpydecode .deb produced (rocpydecode build dropped?)"
-          else
-            CONTENTS=$(dpkg-deb -c "${PYDECODE_DEB}" 2>/dev/null || true)
-            echo "${CONTENTS}" | grep -E 'lib/(rocpydecode|rocpyjpegdecode).*\.so' || true
-            for MOD in rocpydecode rocpyjpegdecode; do
-              if echo "${CONTENTS}" | grep -qE "lib/${MOD}.*\.so"; then
-                echo "  ${MOD} .so packaged: OK"
-              else
-                echo "::warning::${MOD} .so missing from ${PYDECODE_DEB} — modules not in staging/lib/ (empty package)"
-              fi
-            done
+            echo "ERROR: no rocpydecode .deb produced"
+            exit 1
           fi
+          CONTENTS=$(dpkg-deb -c "${PYDECODE_DEB}" 2>/dev/null || true)
+          echo "${CONTENTS}" | grep -E 'lib/(rocpydecode|rocpyjpegdecode).*\.so' || true
+          FAIL=0
+          for MOD in rocpydecode rocpyjpegdecode; do
+            if echo "${CONTENTS}" | grep -qE "lib/${MOD}.*\.so"; then
+              echo "  ${MOD} .so packaged: OK"
+            else
+              echo "  ERROR: ${MOD} .so missing from ${PYDECODE_DEB}"
+              FAIL=1
+            fi
+          done
+          [ "${FAIL}" -eq 0 ] || exit 1
 
       - name: Inspect DEB metadata and payload
         working-directory: pkg-build
@@ -197,9 +209,10 @@ jobs:
             echo "--- summary: ${FILES} file(s), ${LINKS} symlink(s) ---"
 
             PKG="$(dpkg-deb --field "${DEB}" Package)"
-            # Not fatal: rocpydecode is built best-effort, so its packages are
-            # legitimately empty when that build was dropped.
-            [ "${FILES}" -eq 0 ] && echo "::warning::${PKG} contains no files"
+            if [ "${FILES}" -eq 0 ]; then
+              echo "  ERROR: ${PKG} contains no files"
+              FAIL=1
+            fi
             VER="$(dpkg-deb --field "${DEB}" Version)"
             # Every payload path must live under /opt/rocm. The one exception is
             # the .pth, which only works from a real site directory.
@@ -312,26 +325,35 @@ jobs:
         working-directory: pkg-build
         run: |
           cmake --build . --target package-meta-vision 2>/dev/null \
-            || echo "Meta packages skipped (equivs-build not available)"
+            || echo "Meta packages skipped (equivs-build/rpmbuild not available)"
           # equivs-build writes each meta .deb into its WORKING_DIRECTORY
-          # (pkg-build/meta). Collect them next to the component .debs so the
-          # repo/upload steps pick up amdrocm-vision, -sdk and -tests too.
+          # (pkg-build/meta). RPM metas land under meta/rpms/<arch>/. Collect
+          # both next to the component packages so upload/repo steps pick them up.
           cp meta/*.deb . 2>/dev/null || echo "(no meta .debs produced)"
+          find meta/rpms -name '*.rpm' -exec cp {} . \; 2>/dev/null \
+            || echo "(no meta .rpms produced)"
           echo "Meta packages:"; ls -1 *.deb | grep -E 'amdrocm-vision(-sdk|-tests)?_' || true
-          # #3 AC2: when equivs-build is present (it is in CI, installed above),
-          # all three meta-packages must be produced. equivs-build builds one
-          # .deb per control file, so a missing stanza/template silently drops a
-          # package — assert each exists rather than soft-passing.
           if command -v equivs-build >/dev/null 2>&1; then
             MISSING=0
             for m in amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests; do
               if ls "${m}_"*.deb >/dev/null 2>&1; then
-                echo "  ${m}: OK"
+                echo "  ${m} .deb: OK"
               else
                 echo "  ERROR: meta-package ${m} was not produced"; MISSING=1
               fi
             done
             [ "${MISSING}" -eq 0 ] || { echo "Meta-package generation incomplete"; exit 1; }
+          fi
+          if command -v rpmbuild >/dev/null 2>&1; then
+            MISSING=0
+            for m in amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests; do
+              if ls "${m}-"[0-9]*.rpm >/dev/null 2>&1; then
+                echo "  ${m} .rpm: OK"
+              else
+                echo "  ERROR: RPM meta-package ${m} was not produced"; MISSING=1
+              fi
+            done
+            [ "${MISSING}" -eq 0 ] || { echo "RPM meta-package generation incomplete"; exit 1; }
           fi
 
       - name: Build APT repo metadata
@@ -412,11 +434,9 @@ jobs:
 
           ## Install (DEB)
           \`\`\`bash
-          dpkg -i amdrocm-mivisionx_${VER}_amd64.deb
-          dpkg -i amdrocm-rocal_${VER}_amd64.deb
-          dpkg -i amdrocm-roccv_${VER}_amd64.deb
-          dpkg -i amdrocm-pydecode_${VER}_amd64.deb
-          dpkg -i amdrocm-vision-sysdeps_${VER}_amd64.deb
+          # CPack files are amdrocm-vision-<ver>-Linux-<component>.deb
+          # Package names: amdrocm-mivisionx, amdrocm-pydecode, …
+          dpkg -i amdrocm-*.deb
           \`\`\`
 
           Requires ROCm ${ROCM} or later installed at /opt/rocm.
@@ -428,8 +448,7 @@ jobs:
             --notes-file /tmp/release-notes.md \
             pkg-build/*.deb \
             pkg-build/*.rpm \
-            vision-pack-dist-linux-multiarch-*.tar.gz \
-            2>/dev/null || echo "Release upload skipped (no packages)"
+            vision-pack-dist-linux-multiarch-*.tar.gz
 
   # ---------------------------------------------------------------------------
   # Per-package validation.
@@ -524,7 +543,11 @@ jobs:
           # can inspect the shipped .so files for isolation.
           for comp in mivisionx roccv rocal rocpydecode; do
             f="$(deb "$comp")"
-            [ -n "$f" ] && dpkg --force-depends -i "$f"
+            if [ -z "$f" ]; then
+              echo "ERROR: runtime package ${comp} not found among downloaded DEBs"
+              exit 1
+            fi
+            dpkg --force-depends -i "$f"
           done
           echo "=== installed vision tree ==="
           ls -la /opt/rocm/lib/rocm_sysdeps/lib/ || true
