@@ -134,7 +134,7 @@ reintroduce the deb overlay.
 - **`Python3_ROOT_DIR` forwarding to shared Python.** rocCV and rocpydecode call
   `find_package(Python3 ... Development)` which needs `libpython3.x.so`. manylinux's default
   `/opt/python/cp312-cp312` is **statically linked** (no `libpython.so`), so CI points at
-  `/opt/python-shared/cp312-cp312`.
+  `/opt/python-shared/${PYTHON_ABI}` (`PYTHON_ABI` is a workflow env, default `cp312-cp312`).
   - **Clean fix:** upstream should request only `Development.Module` (extension modules don't need
     `Development.Embed`/`libpython.so`). Tracked at rocPyDecode#290. The shared-Python forwarding is
     a reasonable interim workaround, threaded cleanly through the cmake args.

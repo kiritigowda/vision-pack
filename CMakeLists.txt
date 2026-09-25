@@ -20,9 +20,10 @@ if(NOT DEFINED ROCM_PATH)
   set(ROCM_PATH "/opt/rocm" CACHE PATH "Path to the ROCm SDK installation")
 endif()
 # CMAKE_INSTALL_PREFIX defaults to ROCM_PATH. The top-level install() rules
-# only cover bundled runtime deps and finder shims. Vision libraries live in
-# per-project stage dirs and are copied into staging by CI before CPack —
-# `cmake --install` on this project does not assemble the full /opt/rocm tree.
+# cover bundled runtime deps, finder shims, and a few install() workarounds
+# (e.g. hip_cu_mask_tests). Vision libraries live in per-project stage dirs
+# and are copied into staging by CI before CPack — `cmake --install` on this
+# project does not assemble the full /opt/rocm tree.
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX "${ROCM_PATH}" CACHE PATH "" FORCE)
 endif()
@@ -195,11 +196,11 @@ if(VISION_PACK_ENABLE_ROCAL)
 
   if(VISION_PACK_ENABLE_MIVISIONX)
     list(APPEND _rocal_deps mivisionx)
+    # rocAL's FindMIVisionX.cmake searches ${MIVisionX_PATH}/{include,lib},
+    # not CMAKE_PREFIX_PATH. Point it at the mivisionx stage prefix and let
+    # the finder resolve libopenvx / libvx_rpp / headers (#9).
     list(APPEND _rocal_cmake_args
-      "-DOPENVX_LIBRARIES=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/lib/libopenvx.so"
-      "-DVXRPP_LIBRARIES=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/lib/libvx_rpp.so"
-      "-DMIVisionX_INCLUDE_DIRS=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/include/mivisionx"
-      "-DMIVisionX_FOUND=TRUE"
+      "-DMIVisionX_PATH=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage"
     )
   endif()
 
@@ -294,3 +295,16 @@ install(FILES
   DESTINATION lib/cmake
   COMPONENT runtime
 )
+
+# MIVisionX registers openvx_hip_cu_mask_remap_4K against
+# tests/hip_cu_mask_tests/ but never install()s that directory (#42). Copy it
+# into the staged test tree so amdrocm-mivisionx-test is self-consistent.
+# Remove once upstream adds the matching install() rule.
+if(VISION_PACK_ENABLE_MIVISIONX
+    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mivisionx/tests/hip_cu_mask_tests")
+  install(DIRECTORY
+      "${CMAKE_CURRENT_SOURCE_DIR}/mivisionx/tests/hip_cu_mask_tests"
+    DESTINATION share/mivisionx/test
+    COMPONENT runtime
+  )
+endif()

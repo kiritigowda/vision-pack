@@ -91,6 +91,9 @@ env:
   # Any family works (the compiler bundles a code object per gfx); this variant
   # bundles rpp/rocdecode/rocjpeg + share/rocdecode/utils.
   ROCM_SDK_FAMILY_DEFAULT: gfx94X-dcgpu-tests
+  # manylinux CPython tag. One knob for the static interpreter on PATH and the
+  # shared /opt/python-shared tree (libpython.so) forwarded as Python3_ROOT_DIR.
+  PYTHON_ABI: cp312-cp312
 
 jobs:
   build:
@@ -147,7 +150,7 @@ jobs:
           # install is suppressed at the source. Pinned below 3.30 to stay clear
           # of the stricter cmake_minimum_required policy handling that older
           # bundled deps (e.g. libsndfile) trip over.
-          /opt/python/cp312-cp312/bin/python3 -m pip install --quiet "cmake~=3.28.0"
+          /opt/python/${PYTHON_ABI}/bin/python3 -m pip install --quiet "cmake~=3.28.0"
           hash -r
 
           echo "=== Build environment ==="
@@ -157,9 +160,9 @@ jobs:
           echo "LIBRARY_PATH=${LIBRARY_PATH}"
           python3 -c "import sysconfig; print('Python include:', sysconfig.get_path('include'))"
 
-          # Put manylinux Python 3.12 on PATH (interpreter + pip) — this also
+          # Put manylinux Python on PATH (interpreter + pip) — this also
           # puts the pip-installed cmake >=3.28 ahead of the image's 3.27.
-          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+          echo "/opt/python/${PYTHON_ABI}/bin" >> "$GITHUB_PATH"
 
       # Download the nightly ROCm SDK tarball.
       # The dcgpu-tests variant bundles the full SDK (HIP, compiler,
@@ -214,7 +217,7 @@ jobs:
           # Use the shared Python install which has libpython3.12.so (Development.Embed).
           # The manylinux /opt/python build is statically linked — no libpython.so.
           # TheRock's image installs shared Pythons to /opt/python-shared/.
-          SHARED_PY="/opt/python-shared/cp312-cp312"
+          SHARED_PY="/opt/python-shared/${PYTHON_ABI}"
           if [ -d "${SHARED_PY}" ]; then
             PYTHON_ARGS="-DPython3_ROOT_DIR=${SHARED_PY}"
             echo "Using shared Python at ${SHARED_PY}"
@@ -299,6 +302,7 @@ jobs:
             "build/staging/lib/pyRocJpegDecode:rocPyJPEGDecode Python package" \
             "build/staging/share/rocpydecode/tests:rocPyDecode test sources" \
             "build/staging/bin/runvx:mivisionx runvx tool" \
+            "build/staging/share/mivisionx/test/hip_cu_mask_tests/test_hip_cu_mask_remap.py:mivisionx CU-mask test script (#42)" \
             "build/staging/share/rocal/test/data/images/AMD-tinyDataSet:rocAL test data" \
             "${SYSDEPS}/libturbojpeg-rocm-vision.so*:bundled turbojpeg" \
             "${SYSDEPS}/libprotobuf-rocm-vision.so*:bundled protobuf" \
@@ -633,7 +637,7 @@ jobs:
       - name: Install extra build tools
         run: |
           yum install -y python3-devel make curl 2>/dev/null || true
-          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+          echo "/opt/python/${PYTHON_ABI}/bin" >> "$GITHUB_PATH"
 
       - name: Fetch nightly ROCm SDK
         env:
@@ -666,7 +670,7 @@ jobs:
 
       - name: Build & run tests — ${{ matrix.lib }}
         env:
-          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
+          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/${{ env.PYTHON_ABI }}/bin:/usr/local/bin:/usr/bin:/bin
           LD_LIBRARY_PATH: >-
             ${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib:${{ env.ROCM_PATH }}/lib/rocm_sysdeps/lib
           AGO_DEFAULT_TARGET: CPU
@@ -758,7 +762,7 @@ jobs:
       - name: Python import smoke test — ${{ matrix.lib }}
         if: matrix.lib == 'rocal' || matrix.lib == 'roccv' || matrix.lib == 'rocpydecode'
         env:
-          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
+          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/${{ env.PYTHON_ABI }}/bin:/usr/local/bin:/usr/bin:/bin
           LD_LIBRARY_PATH: >-
             ${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib:${{ env.ROCM_PATH }}/lib/rocm_sysdeps/lib
           PYTHONPATH: ${{ env.ROCM_PATH }}/lib
@@ -793,7 +797,7 @@ jobs:
       - name: Run installed Python tests — rocpydecode
         if: matrix.lib == 'rocpydecode'
         env:
-          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/cp312-cp312/bin:/usr/local/bin:/usr/bin:/bin
+          PATH: ${{ env.ROCM_PATH }}/bin:/opt/python/${{ env.PYTHON_ABI }}/bin:/usr/local/bin:/usr/bin:/bin
           LD_LIBRARY_PATH: >-
             ${{ env.ROCM_PATH }}/lib:${{ env.ROCM_PATH }}/lib/llvm/lib:${{ env.ROCM_PATH }}/lib/rocm_sysdeps/lib
           PYTHONPATH: ${{ env.ROCM_PATH }}/lib

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `amdrocm-mivisionx-test` now ships `hip_cu_mask_tests/`, so
+  `openvx_hip_cu_mask_remap_4K` has the script it registers (#42).
+
+### Changed
+- rocAL finds the staged MIVisionX via `MIVisionX_PATH` instead of hard-coded
+  library paths (#9).
+- CI Python is keyed off a single `PYTHON_ABI` workflow env (still `cp312-cp312`)
+  (#9).
+
 ## [0.2.0] — 2026-09-24
 
 Packaging and CI cleanup. The product is DEB/RPM plus the dist tarball;

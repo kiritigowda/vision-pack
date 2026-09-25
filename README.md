@@ -42,7 +42,7 @@ To inspect a shipped library:
 ## Scope
 
 vision-pack exists to **build, package, test, and deliver** the `amdrocm-vision`
-package set:
+package set on **Linux**. Windows and macOS are out of scope.
 
 - build the four vision libraries plus the dependencies they require;
 - package them so contents and dependency metadata match ROCm conventions;
@@ -466,6 +466,13 @@ Workarounds live in vision-pack, not in the submodules.
   `rewrite_sonames.py` is what actually corrects it
   ([#45](https://github.com/kiritigowda/vision-pack/issues/45)).
 
+- **MIVisionX `hip_cu_mask_tests` not installed upstream** — the test suite
+  registers `openvx_hip_cu_mask_remap_4K` but never `install()`s
+  `tests/hip_cu_mask_tests/`. vision-pack copies that directory into the
+  staged test tree so `amdrocm-mivisionx-test` is self-consistent
+  ([#42](https://github.com/kiritigowda/vision-pack/issues/42)). Remove the
+  copy once MIVisionX ships the matching `install()` rule.
+
 - **rocPyDecode `Development.Embed`** — upstream
   `find_package(Python3 Development)` needs `libpython.so`. manylinux's default
   CPython is statically linked, so CI forwards `Python3_ROOT_DIR` to
@@ -506,7 +513,7 @@ CI builds in manylinux_2_28 (CPU). GPU suites skip without `/dev/kfd`.
 
 | | |
 |---|---|
-| OS | Ubuntu 24.04 LTS (local), manylinux_2_28 (CI) |
+| OS | Linux only — Ubuntu 24.04 LTS (local), manylinux_2_28 (CI) |
 | ROCm | 10.2 (nightly `gfx94X-dcgpu-tests`) |
 | GPU | gfx1100 when present (Radeon RX 7900 series) |
 | CMake | 3.28 |
