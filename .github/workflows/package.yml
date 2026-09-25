@@ -83,9 +83,11 @@ jobs:
       - name: Install packaging tools
         run: |
           apt-get update -qq
+          # gh is not in the ubuntu:24.04 image; the nightly prerelease step
+          # needs it (hosted runners have it, this container job does not).
           apt-get install -y --no-install-recommends \
             cmake dpkg-dev debhelper equivs rpm createrepo-c \
-            patchelf python3 curl jq git
+            patchelf python3 curl jq git gh
           # This job also runs as root against a checkout owned by the runner
           # user; without this git refuses to read the repository and the
           # version lookup below can never resolve a tag.

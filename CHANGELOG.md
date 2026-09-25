@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Nightly packaging installs `gh` in the Ubuntu container and grants
+  `contents: write` so `gh release create` can publish the prerelease.
+
 ## [0.2.0] — 2026-09-24
 
 Packaging and CI cleanup. The product is DEB/RPM plus the dist tarball;
