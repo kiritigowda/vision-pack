@@ -27,8 +27,8 @@ tests consume those artifacts. `amdrocm-pydecode` is required.
   packaging. GPU suites skip when `/dev/kfd` is absent; CPU failures are red.
 - `amdrocm-pydecode-test` keeps jpeg tests under `share/rocpyjpegdecode/tests`,
   matching the tarball.
-- README rewritten around packages/tarball (build graph, `/opt/rocm` layout,
-  package table, bundled deps). Clone URL is kiritigowda/vision-pack.
+- README updated for packages/tarball as the product (clone URL
+  kiritigowda/vision-pack; no `cmake --install` install path).
 
 ### Fixed
 - `amdrocm-mivisionx-devel` no longer ships `share/mivisionx/test` (collided
