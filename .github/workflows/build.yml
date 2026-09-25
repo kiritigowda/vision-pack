@@ -114,6 +114,10 @@ jobs:
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
       version: ${{ steps.meta.outputs.version }}
+      resolved_sdk_url: ${{ steps.sdk.outputs.url }}
+      resolved_sdk_key: ${{ steps.sdk.outputs.key }}
+      resolved_sdk_name: ${{ steps.sdk.outputs.name }}
+      resolved_sdk_archive: ${{ steps.sdk.outputs.archive }}
 
     steps:
       - uses: actions/checkout@v7
@@ -217,16 +221,18 @@ jobs:
 
       - name: Extract and verify ROCm SDK
         env:
-          RESOLVED_SDK: ${{ steps.sdk.outputs.name }}
+          RESOLVED_SDK_URL: ${{ steps.sdk.outputs.url }}
+          RESOLVED_SDK_NAME: ${{ steps.sdk.outputs.name }}
           SDK_CACHE_ARCHIVE: ${{ steps.sdk.outputs.archive }}
         run: |
           mkdir -p "${ROCM_PATH}"
           tar -xzf "${GITHUB_WORKSPACE}/.rocm-sdk-cache/${SDK_CACHE_ARCHIVE}" \
             -C "${ROCM_PATH}" --strip-components=1
-          # Record the exact tarball on both cache hits and misses. "latest"
+          # Record the exact URL on both cache hits and misses. "latest"
           # moves, so the build manifest needs this for reproducibility (#29).
-          echo "VP_RESOLVED_SDK=${RESOLVED_SDK}" >> "$GITHUB_ENV"
-          echo "Resolved SDK: ${RESOLVED_SDK}"
+          echo "VP_RESOLVED_SDK=${RESOLVED_SDK_URL}" >> "$GITHUB_ENV"
+          echo "Resolved SDK: ${RESOLVED_SDK_NAME}"
+          echo "Resolved SDK URL: ${RESOLVED_SDK_URL}"
           echo "SDK cache hit: ${{ steps.sdk-cache.outputs.cache-hit }}"
           echo "SDK cmake packages available:"
           ls "${ROCM_PATH}/lib/cmake/" | head -30
@@ -673,42 +679,18 @@ jobs:
           yum install -y python3-devel make curl 2>/dev/null || true
           echo "/opt/python/${PYTHON_ABI}/bin" >> "$GITHUB_PATH"
 
-      - name: Resolve nightly ROCm SDK
-        id: sdk
-        env:
-          SDK_DATE: ${{ inputs.rocm_sdk_date }}
-          SDK_FAMILY: ${{ inputs.rocm_sdk_family }}
-          SDK_URL: ${{ inputs.rocm_sdk_url }}
-        run: |
-          if [ -n "${SDK_URL}" ]; then
-            ARGS="--url ${SDK_URL}"
-          else
-            FAMILY="${SDK_FAMILY:-${ROCM_SDK_FAMILY_DEFAULT}}"
-            ARGS="--gpu-family ${FAMILY}"
-            [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
-          fi
-          OUTPUT="$(python3 build_tools/fetch_rocm_sdk.py ${ARGS} --print-url)"
-          echo "${OUTPUT}"
-          URL="$(printf '%s\n' "${OUTPUT}" | tail -1)"
-          KEY="$(printf '%s' "${URL}" | sha256sum | cut -d' ' -f1)"
-          NAME="$(python3 -c 'import os, sys, urllib.parse; print(os.path.basename(urllib.parse.urlsplit(sys.argv[1]).path))' "${URL}")"
-          echo "url=${URL}" >> "$GITHUB_OUTPUT"
-          echo "key=${KEY}" >> "$GITHUB_OUTPUT"
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "archive=${KEY}.tar.gz" >> "$GITHUB_OUTPUT"
-
       - name: Restore ROCm SDK archive
         id: sdk-cache
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.rocm-sdk-cache
-          key: rocm-sdk-linux-${{ steps.sdk.outputs.key }}
+          key: rocm-sdk-linux-${{ needs.build.outputs.resolved_sdk_key }}
 
       - name: Download ROCm SDK archive
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         env:
-          RESOLVED_SDK_URL: ${{ steps.sdk.outputs.url }}
-          SDK_CACHE_ARCHIVE: ${{ steps.sdk.outputs.archive }}
+          RESOLVED_SDK_URL: ${{ needs.build.outputs.resolved_sdk_url }}
+          SDK_CACHE_ARCHIVE: ${{ needs.build.outputs.resolved_sdk_archive }}
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/.rocm-sdk-cache"
           curl -fL --retry 3 --progress-bar "${RESOLVED_SDK_URL}" \
@@ -716,8 +698,10 @@ jobs:
 
       - name: Extract and verify ROCm SDK
         env:
-          SDK_CACHE_ARCHIVE: ${{ steps.sdk.outputs.archive }}
+          RESOLVED_SDK_URL: ${{ needs.build.outputs.resolved_sdk_url }}
+          SDK_CACHE_ARCHIVE: ${{ needs.build.outputs.resolved_sdk_archive }}
         run: |
+          echo "Using build SDK: ${RESOLVED_SDK_URL}"
           mkdir -p "${ROCM_PATH}"
           tar -xzf "${GITHUB_WORKSPACE}/.rocm-sdk-cache/${SDK_CACHE_ARCHIVE}" \
             -C "${ROCM_PATH}" --strip-components=1
