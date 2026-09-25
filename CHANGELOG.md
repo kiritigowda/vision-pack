@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   library paths (#9).
 - CI Python is keyed off a single `PYTHON_ABI` workflow env (still `cp312-cp312`)
   (#9).
+- CI caches the extracted ROCm SDK by its exact resolved tarball URL, avoiding
+  the same multi-gigabyte download in the build and each test leg (#9, #23).
 
 ## [0.2.0] — 2026-09-24
 

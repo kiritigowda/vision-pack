@@ -164,35 +164,70 @@ jobs:
           # puts the pip-installed cmake >=3.28 ahead of the image's 3.27.
           echo "/opt/python/${PYTHON_ABI}/bin" >> "$GITHUB_PATH"
 
-      # Download the nightly ROCm SDK tarball.
-      # The dcgpu-tests variant bundles the full SDK (HIP, compiler,
-      # rocm_sysdeps) *plus* rpp, rocDecode, rocJPEG headers/cmake and the
-      # rocDecode build utils (share/rocdecode/utils) under one prefix — so
-      # no separate deb overlay is needed. Vision libs have no GPU kernel
-      # code, so a single-family SDK builds all supported GPU families.
-      - name: Fetch nightly ROCm SDK
+      # Resolve the moving nightly alias before looking in the cache. The exact
+      # URL is part of the key, so a newly published nightly cannot reuse an
+      # older extracted SDK.
+      - name: Resolve nightly ROCm SDK
+        id: sdk
         env:
           SDK_DATE: ${{ inputs.rocm_sdk_date }}
           SDK_FAMILY: ${{ inputs.rocm_sdk_family }}
           SDK_URL: ${{ inputs.rocm_sdk_url }}
         run: |
-          ARGS="--dest ${ROCM_PATH}"
           if [ -n "${SDK_URL}" ]; then
-            # Pin an exact tarball (e.g. run-id multi-arch S3 artifact).
-            ARGS="${ARGS} --url ${SDK_URL}"
+            ARGS="--url ${SDK_URL}"
           else
             FAMILY="${SDK_FAMILY:-${ROCM_SDK_FAMILY_DEFAULT}}"
-            ARGS="${ARGS} --gpu-family ${FAMILY}"
+            ARGS="--gpu-family ${FAMILY}"
             [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
           fi
-          python3 build_tools/fetch_rocm_sdk.py ${ARGS} > /tmp/sdk-fetch.log 2>&1 \
-            || { cat /tmp/sdk-fetch.log; exit 1; }
-          cat /tmp/sdk-fetch.log
-          # Record which tarball was actually resolved. "latest" moves, so
-          # without this a nightly that breaks cannot be reproduced (#29).
-          RESOLVED="$(sed -n 's/^Selected[^:]*: //p' /tmp/sdk-fetch.log | head -1)"
-          echo "VP_RESOLVED_SDK=${RESOLVED}" >> "$GITHUB_ENV"
-          echo "Resolved SDK: ${RESOLVED:-<unknown>}"
+          OUTPUT="$(python3 build_tools/fetch_rocm_sdk.py ${ARGS} --print-url)"
+          echo "${OUTPUT}"
+          URL="$(printf '%s\n' "${OUTPUT}" | tail -1)"
+          KEY="$(printf '%s' "${URL}" | sha256sum | cut -d' ' -f1)"
+          NAME="$(python3 -c 'import os, sys, urllib.parse; print(os.path.basename(urllib.parse.urlsplit(sys.argv[1]).path))' "${URL}")"
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "key=${KEY}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "archive=${KEY}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Restore ROCm SDK archive
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.rocm-sdk-cache
+          key: rocm-sdk-linux-${{ steps.sdk.outputs.key }}
+
+      # Cache the compressed archive rather than the extracted SDK. The latter
+      # can exceed GitHub's cache quota, while the archive is about 2 GB.
+      # The dcgpu-tests variant bundles the full SDK (HIP, compiler,
+      # rocm_sysdeps) *plus* rpp, rocDecode, rocJPEG headers/cmake and the
+      # rocDecode build utils (share/rocdecode/utils) under one prefix — so
+      # no separate deb overlay is needed. Vision libs have no GPU kernel
+      # code, so a single-family SDK builds all supported GPU families.
+      - name: Download ROCm SDK archive
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        env:
+          RESOLVED_SDK_URL: ${{ steps.sdk.outputs.url }}
+          SDK_CACHE_ARCHIVE: ${{ steps.sdk.outputs.archive }}
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/.rocm-sdk-cache"
+          curl -fL --retry 3 --progress-bar "${RESOLVED_SDK_URL}" \
+            -o "${GITHUB_WORKSPACE}/.rocm-sdk-cache/${SDK_CACHE_ARCHIVE}"
+
+      - name: Extract and verify ROCm SDK
+        env:
+          RESOLVED_SDK: ${{ steps.sdk.outputs.name }}
+          SDK_CACHE_ARCHIVE: ${{ steps.sdk.outputs.archive }}
+        run: |
+          mkdir -p "${ROCM_PATH}"
+          tar -xzf "${GITHUB_WORKSPACE}/.rocm-sdk-cache/${SDK_CACHE_ARCHIVE}" \
+            -C "${ROCM_PATH}" --strip-components=1
+          # Record the exact tarball on both cache hits and misses. "latest"
+          # moves, so the build manifest needs this for reproducibility (#29).
+          echo "VP_RESOLVED_SDK=${RESOLVED_SDK}" >> "$GITHUB_ENV"
+          echo "Resolved SDK: ${RESOLVED_SDK}"
+          echo "SDK cache hit: ${{ steps.sdk-cache.outputs.cache-hit }}"
           echo "SDK cmake packages available:"
           ls "${ROCM_PATH}/lib/cmake/" | head -30
 
@@ -638,21 +673,61 @@ jobs:
           yum install -y python3-devel make curl 2>/dev/null || true
           echo "/opt/python/${PYTHON_ABI}/bin" >> "$GITHUB_PATH"
 
-      - name: Fetch nightly ROCm SDK
+      - name: Resolve nightly ROCm SDK
+        id: sdk
         env:
           SDK_DATE: ${{ inputs.rocm_sdk_date }}
           SDK_FAMILY: ${{ inputs.rocm_sdk_family }}
           SDK_URL: ${{ inputs.rocm_sdk_url }}
         run: |
-          ARGS="--dest ${ROCM_PATH}"
           if [ -n "${SDK_URL}" ]; then
-            ARGS="${ARGS} --url ${SDK_URL}"
+            ARGS="--url ${SDK_URL}"
           else
             FAMILY="${SDK_FAMILY:-${ROCM_SDK_FAMILY_DEFAULT}}"
-            ARGS="${ARGS} --gpu-family ${FAMILY}"
+            ARGS="--gpu-family ${FAMILY}"
             [ -n "${SDK_DATE}" ] && ARGS="${ARGS} --date ${SDK_DATE}"
           fi
-          python3 build_tools/fetch_rocm_sdk.py ${ARGS}
+          OUTPUT="$(python3 build_tools/fetch_rocm_sdk.py ${ARGS} --print-url)"
+          echo "${OUTPUT}"
+          URL="$(printf '%s\n' "${OUTPUT}" | tail -1)"
+          KEY="$(printf '%s' "${URL}" | sha256sum | cut -d' ' -f1)"
+          NAME="$(python3 -c 'import os, sys, urllib.parse; print(os.path.basename(urllib.parse.urlsplit(sys.argv[1]).path))' "${URL}")"
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "key=${KEY}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "archive=${KEY}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Restore ROCm SDK archive
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.rocm-sdk-cache
+          key: rocm-sdk-linux-${{ steps.sdk.outputs.key }}
+
+      - name: Download ROCm SDK archive
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        env:
+          RESOLVED_SDK_URL: ${{ steps.sdk.outputs.url }}
+          SDK_CACHE_ARCHIVE: ${{ steps.sdk.outputs.archive }}
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/.rocm-sdk-cache"
+          curl -fL --retry 3 --progress-bar "${RESOLVED_SDK_URL}" \
+            -o "${GITHUB_WORKSPACE}/.rocm-sdk-cache/${SDK_CACHE_ARCHIVE}"
+
+      - name: Extract and verify ROCm SDK
+        env:
+          SDK_CACHE_ARCHIVE: ${{ steps.sdk.outputs.archive }}
+        run: |
+          mkdir -p "${ROCM_PATH}"
+          tar -xzf "${GITHUB_WORKSPACE}/.rocm-sdk-cache/${SDK_CACHE_ARCHIVE}" \
+            -C "${ROCM_PATH}" --strip-components=1
+          for CHECK in \
+            "${ROCM_PATH}/include/rpp/rpp.h" \
+            "${ROCM_PATH}/include/rocjpeg/rocjpeg.h" \
+            "${ROCM_PATH}/share/rocdecode/utils/rocvideodecode/roc_video_dec.cpp"; do
+            test -f "${CHECK}" \
+              || { echo "ERROR: incomplete SDK cache: ${CHECK} missing"; exit 1; }
+          done
 
       - name: Download dist tarball
         uses: actions/download-artifact@v8

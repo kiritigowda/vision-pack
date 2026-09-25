@@ -55,7 +55,8 @@ or empty package fails CI rather than being omitted from the meta Depends.
 3. **RPATH**: every vision `.so` gets `$ORIGIN:$ORIGIN/../lib/rocm_sysdeps/lib` baked in, so bundled
    deps + existing ROCm sysdeps resolve at runtime with no `LD_LIBRARY_PATH`.
 4. **CI (`build.yml`)** stages everything into `build/staging/` (mirrors `/opt/rocm` layout) and
-   uploads it as an artifact.
+   uploads it as an artifact. The compressed ROCm SDK is cached by a SHA-256 of its exact resolved
+   tarball URL, so build and test jobs reuse only byte-identical SDK inputs.
 5. **CI (`package.yml`)** consumes that staging tree and runs **CPack** (config in
    `packaging/CMakeLists.txt`) to cut DEB/RPM/TGZ split by component, plus equivs meta-packages
    (`packaging/meta/amdrocm-vision.control.in`).
