@@ -409,6 +409,11 @@ jobs:
         if: inputs.release_type == 'nightly'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job's workspace is a container mount. Git stops at that
+          # boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM), so `gh` cannot see the
+          # checkout. CI never hits this step; nightly does. Name the repo
+          # explicitly and pass the commit, so neither command shells out to git.
+          GH_REPO: ${{ github.repository }}
         run: |
           VER="${{ steps.version.outputs.version }}"
           BUILD="${{ steps.version.outputs.build_id }}"
@@ -416,9 +421,8 @@ jobs:
           TAG="nightly-${BUILD}"
           SHA="${{ inputs.sha || github.sha }}"
 
-          # Replace previous nightly tag
-          gh release delete "${TAG}" --yes 2>/dev/null || true
-          git tag -d "${TAG}" 2>/dev/null || true
+          # Replace the previous day's release. A missing tag is expected.
+          gh release delete "${TAG}" --yes --cleanup-tag || true
 
           cat > /tmp/release-notes.md << NOTES
           Nightly build of AMD ROCm Computer Vision extension pack.
@@ -445,6 +449,7 @@ jobs:
           NOTES
 
           gh release create "${TAG}" \
+            --target "${SHA}" \
             --prerelease \
             --title "vision-pack nightly ${VER} (${BUILD})" \
             --notes-file /tmp/release-notes.md \

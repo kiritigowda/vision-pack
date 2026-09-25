@@ -8,8 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Nightly packaging installs `gh` in the Ubuntu container and grants
-  `contents: write` so `gh release create` can publish the prerelease.
+- Nightly packaging installs `gh` in the Ubuntu container, grants
+  `contents: write`, and publishes the prerelease with `GH_REPO` plus
+  `--target` so `gh` does not need a local git checkout inside the container.
 
 ## [0.2.0] — 2026-09-24
 
