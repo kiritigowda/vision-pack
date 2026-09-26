@@ -83,6 +83,12 @@ jobs:
   # ---------------------------------------------------------------------------
   build:
     needs: bump-submodules
+    # package.yml's nightly prerelease step needs to create/replace a GitHub
+    # release. Reusable workflows cannot escalate the caller's token, so write
+    # must be granted here (the only job that publishes).
+    permissions:
+      contents: write
+      actions: read
     uses: ./.github/workflows/build.yml
     with:
       ref: ${{ needs.bump-submodules.outputs.sha }}
