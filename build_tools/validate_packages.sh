@@ -164,6 +164,25 @@ check_package() {
     done
   fi
 
+  # --- empty directories (#55) ----------------------------------------------
+  # A directory with no file under it belongs to another component. Shipping
+  # it makes `import amd.rocal` succeed when only amdrocm-roccv is installed.
+  local d empty=""
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    d="${d%/}"
+    if ! printf '%s\n' "$paths" | grep -F -q -- "${d}/"; then
+      empty="${empty}      ${d}"$'\n'
+    fi
+  done < <(echo "$contents" | awk '$1 ~ /^d/ {print $6}')
+  if [ -n "$empty" ]; then
+    echo "  ERROR: ${pkg} ships empty directories:"
+    printf '%s' "$empty"
+    fail=1
+  else
+    echo "  no empty directories: OK"
+  fi
+
   # --- SONAME chains ---------------------------------------------------------
   # A versioned library must be one real file plus symlinks. Duplicate regular
   # files make the loader map the library twice under different inodes (#43).

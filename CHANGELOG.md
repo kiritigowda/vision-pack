@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nightly packaging installs `gh` and `ca-certificates` in the Ubuntu
   container, grants `contents: write`, and publishes the prerelease with
   `GH_REPO` plus `--target` so `gh` does not need a local git checkout.
+- Runtime packages no longer ship other components' empty directories, so
+  installing only `amdrocm-roccv` does not make `import amd.rocal` succeed.
 
 ## [0.2.0] — 2026-09-24
 

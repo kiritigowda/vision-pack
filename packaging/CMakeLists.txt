@@ -94,13 +94,29 @@ set(CPACK_COMPONENT_PYTHONPATH_DESCRIPTION
 # Install rules — paths match /opt/rocm exactly
 # ---------------------------------------------------------------------------
 
+# install(DIRECTORY ... FILES_MATCHING) still creates every subdirectory it
+# walks, so each runtime package shipped the other components' trees empty.
+# With only amdrocm-roccv installed, `import amd.rocal` then succeeds as a
+# namespace package (#55). Glob the files instead. Configure runs after the
+# staging tree is unpacked, and install(FILES) keeps SONAME symlinks as
+# symlinks.
+function(vision_pack_install_matched component destination)
+  file(GLOB _matched LIST_DIRECTORIES false ${ARGN})
+  if(NOT _matched)
+    message(FATAL_ERROR
+      "vision-pack: component '${component}' matched no files for '${destination}'")
+  endif()
+  install(FILES ${_matched}
+    DESTINATION "${destination}"
+    COMPONENT "${component}"
+  )
+endfunction()
+
 # --- MIVisionX runtime: lib/*.so + bin/runvx ---
-install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/"
-    DESTINATION lib COMPONENT mivisionx
-    FILES_MATCHING
-      PATTERN "libopenvx.so*"
-      PATTERN "libvxu.so*"
-      PATTERN "libvx_rpp.so*"
+vision_pack_install_matched(mivisionx lib
+  "${VISION_PACK_STAGING_DIR}/lib/libopenvx.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/libvxu.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/libvx_rpp.so*"
 )
 install(PROGRAMS "${VISION_PACK_STAGING_DIR}/bin/runvx"
     DESTINATION bin COMPONENT mivisionx OPTIONAL
@@ -131,11 +147,9 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/mivisionx/test"
 )
 
 # --- rocAL runtime: lib/librocal.so* + Python binding ---
-install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/"
-    DESTINATION lib COMPONENT rocal
-    FILES_MATCHING
-      PATTERN "librocal.so*"
-      PATTERN "rocal_pybind*.so"
+vision_pack_install_matched(rocal lib
+  "${VISION_PACK_STAGING_DIR}/lib/librocal.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocal_pybind*.so"
 )
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/amd"
     DESTINATION lib COMPONENT rocal OPTIONAL
@@ -158,12 +172,10 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocal/test"
 )
 
 # --- rocCV runtime: lib/libroccv.so* + Python binding + type stub ---
-install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/"
-    DESTINATION lib COMPONENT roccv
-    FILES_MATCHING
-      PATTERN "libroccv.so*"
-      PATTERN "rocpycv*.so"
-      PATTERN "rocpycv.pyi"
+vision_pack_install_matched(roccv lib
+  "${VISION_PACK_STAGING_DIR}/lib/libroccv.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocpycv*.so"
+  "${VISION_PACK_STAGING_DIR}/lib/rocpycv.pyi"
 )
 install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/roccv/LICENSE.txt"
     DESTINATION share/doc/amdrocm-roccv COMPONENT roccv OPTIONAL
@@ -188,13 +200,16 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/roccv/test"
 # (rocPyDecode#285), so we can't rely on component-filtered installs. Instead we
 # split by PATH here at the packaging layer: runtime .so's → rocpydecode, and
 # share/rocpydecode/tests → rocpydecode-test (below). No submodule patch needed.
-install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/"
+# The pyRoc* trees are this component's own packages, so they install whole.
+vision_pack_install_matched(rocpydecode lib
+  "${VISION_PACK_STAGING_DIR}/lib/rocpydecode*.so"
+  "${VISION_PACK_STAGING_DIR}/lib/rocpyjpegdecode*.so"
+)
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/pyRocVideoDecode"
     DESTINATION lib COMPONENT rocpydecode
-    FILES_MATCHING
-      PATTERN "rocpydecode*.so"
-      PATTERN "rocpyjpegdecode*.so"
-      PATTERN "pyRocVideoDecode/*"
-      PATTERN "pyRocJpegDecode/*"
+)
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/pyRocJpegDecode"
+    DESTINATION lib COMPONENT rocpydecode
 )
 # --- rocPyDecode test ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpydecode/tests"
@@ -209,15 +224,13 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpyjpegdecode/tests"
 # The build stage rewrites their SONAMEs to private *-rocm-vision names for
 # side-by-side isolation from host copies (build_tools/rewrite_sonames.py, #4),
 # so the patterns match the renamed files, not the stock upstream names.
-install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/"
-    DESTINATION lib/rocm_sysdeps/lib COMPONENT rocm-sysdeps-vision
-    FILES_MATCHING
-      PATTERN "libturbojpeg-rocm-vision.so*"
-      PATTERN "libjpeg-rocm-vision.so*"
-      PATTERN "libprotobuf-rocm-vision.so*"
-      PATTERN "libprotobuf-lite-rocm-vision.so*"
-      PATTERN "liblmdb-rocm-vision.so*"
-      PATTERN "libsndfile-rocm-vision.so*"
+vision_pack_install_matched(rocm-sysdeps-vision lib/rocm_sysdeps/lib
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libturbojpeg-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libjpeg-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libprotobuf-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libprotobuf-lite-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/liblmdb-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libsndfile-rocm-vision.so*"
 )
 
 # --- Python path registration (.pth) → host site-packages (#4) ---
