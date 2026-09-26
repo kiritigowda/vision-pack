@@ -85,7 +85,10 @@ jobs:
           apt-get update -qq
           # gh is not in the ubuntu:24.04 image; the nightly prerelease step
           # needs it (hosted runners have it, this container job does not).
+          # --no-install-recommends skips ca-certificates, and without that
+          # bundle gh rejects api.github.com (x509: unknown authority).
           apt-get install -y --no-install-recommends \
+            ca-certificates \
             cmake dpkg-dev debhelper equivs rpm createrepo-c \
             patchelf python3 curl jq git gh
           # This job also runs as root against a checkout owned by the runner
