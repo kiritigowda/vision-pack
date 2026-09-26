@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Runtime packages no longer ship other components' empty directories, so
+  installing only `amdrocm-roccv` does not make `import amd.rocal` succeed.
+
 ## [0.2.0] — 2026-09-24
 
 Packaging and CI cleanup. The product is DEB/RPM plus the dist tarball;
