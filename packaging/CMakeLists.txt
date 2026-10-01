@@ -185,6 +185,11 @@ vision_pack_install_matched(roccv lib
 install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/roccv/LICENSE.txt"
     DESTINATION share/doc/amdrocm-roccv COMPONENT roccv OPTIONAL
 )
+# Licenses of the vendored deps compiled into rocpycv (staged by top-level
+# CMakeLists): pybind11, dlpack.
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-roccv/licenses"
+    DESTINATION share/doc/amdrocm-roccv COMPONENT roccv OPTIONAL
+)
 # --- rocCV dev: include/roccv/ + lib/cmake/roccv/ ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/include/roccv"
     DESTINATION include COMPONENT roccv-dev
@@ -215,6 +220,14 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/pyRocVideoDecode"
 )
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/pyRocJpegDecode"
     DESTINATION lib COMPONENT rocpydecode
+)
+# rocPyDecode's own LICENSE + vendored dep licenses (pybind11, dlpack) compiled
+# into rocpydecode/rocpyjpegdecode (staged by top-level CMakeLists).
+install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-pydecode/LICENSE.txt"
+    DESTINATION share/doc/amdrocm-pydecode COMPONENT rocpydecode OPTIONAL
+)
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-pydecode/licenses"
+    DESTINATION share/doc/amdrocm-pydecode COMPONENT rocpydecode OPTIONAL
 )
 # --- rocPyDecode test ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpydecode/tests"
@@ -317,7 +330,20 @@ set(CPACK_DEBIAN_ROCPYDECODE-TEST_PACKAGE_DEPENDS
 set(CPACK_RPM_COMPONENT_INSTALL ON)
 set(CPACK_RPM_PACKAGE_RELEASE   "${VISION_PACK_BUILD_ID}")
 set(CPACK_RPM_PACKAGE_GROUP     "Development/Libraries")
-set(CPACK_RPM_PACKAGE_LICENSE   "MIT")
+# RPM License tag. The vision libraries are MIT, but the runtime packages bundle
+# third-party code under other licenses (sysdeps: protobuf BSD-3, libjpeg-turbo
+# IJG/BSD/Zlib, LMDB OpenLDAP, libsndfile LGPL-2.1; rocAL/rocCV/rocPyDecode:
+# pybind11 BSD-3, DLPack Apache-2.0, RapidJSON MIT). Stock CPack has no
+# per-component License override — CPackRPM reads only the global
+# CPACK_RPM_PACKAGE_LICENSE (its per-component spec-header fallback covers
+# REQUIRES/PROVIDES/etc. but not LICENSE), and CPACK_PROJECT_CONFIG_FILE is
+# per-generator, not per-component. So declare the pack's full license set here:
+# accurate as a superset (no package under-claims copyleft), at the cost of the
+# pure-MIT packages over-declaring. The per-package license texts ship under
+# each package's share/doc/<pkg>/licenses/ (see third-party/ and top-level
+# CMakeLists). True per-package tags would need custom per-component specfiles.
+set(CPACK_RPM_PACKAGE_LICENSE
+    "MIT AND BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later AND Apache-2.0")
 set(CPACK_RPM_PACKAGE_URL       "https://github.com/kiritigowda/vision-pack")
 
 set(CPACK_RPM_MIVISIONX_PACKAGE_NAME            "amdrocm-mivisionx")

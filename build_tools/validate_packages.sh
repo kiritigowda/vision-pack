@@ -169,9 +169,9 @@ check_package() {
   # the dep was actually bundled, so a distro build against system copies
   # (VISION_PACK_BUNDLE_*=OFF) is not wrongly rejected:
   #   sysdeps  — key off each renamed runtime .so that shipped.
-  #   rocAL    — header-only deps leave no file, so key off the licenses/ dir:
-  #              if it shipped it must be complete; if absent (system copies),
-  #              skip.
+  #   rocAL/rocCV/rocPyDecode — header-only deps leave no file, so key off the
+  #              licenses/ dir: if it shipped it must be complete; if absent
+  #              (system copies), skip. rocPyDecode must also ship its own LICENSE.
   local dep so lic
   case "$pkg" in
     amdrocm-vision-sysdeps)
@@ -195,6 +195,33 @@ check_package() {
             echo "  license for ${lic}: OK"
           else
             echo "  ERROR: ${pkg} ships bundled-dep licenses but not ${lic}"; fail=1
+          fi
+        done
+      fi
+      ;;
+    amdrocm-roccv)
+      if echo "$paths" | grep -qE "share/doc/amdrocm-roccv/licenses/"; then
+        for lic in pybind11 dlpack; do
+          if echo "$paths" | grep -qE "share/doc/amdrocm-roccv/licenses/${lic}/"; then
+            echo "  license for ${lic}: OK"
+          else
+            echo "  ERROR: ${pkg} ships vendored-dep licenses but not ${lic}"; fail=1
+          fi
+        done
+      fi
+      ;;
+    amdrocm-pydecode)
+      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/LICENSE"; then
+        echo "  rocPyDecode LICENSE: OK"
+      else
+        echo "  ERROR: ${pkg} ships no LICENSE text"; fail=1
+      fi
+      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/licenses/"; then
+        for lic in pybind11 dlpack; do
+          if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/licenses/${lic}/"; then
+            echo "  license for ${lic}: OK"
+          else
+            echo "  ERROR: ${pkg} ships vendored-dep licenses but not ${lic}"; fail=1
           fi
         done
       fi

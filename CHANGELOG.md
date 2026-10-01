@@ -18,11 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (e.g. `nightly-20260926-3-gSHA`) that CPack rejects.
 
 ### Added
-- Bundled third-party dependencies now ship their license files. The runtime
-  deps (protobuf, libjpeg-turbo, lmdb, libsndfile) carry their licenses in
-  `amdrocm-vision-sysdeps`; the header-only deps compiled into rocAL (pybind11,
-  dlpack, rapidjson) carry theirs in `amdrocm-rocal`, under
-  `share/doc/<pkg>/licenses/<dep>/`. `validate_packages.sh` fails if any is missing.
+- Bundled third-party dependencies now ship their license files, each in the
+  package that carries its code, under `share/doc/<pkg>/licenses/<dep>/`:
+  - `amdrocm-vision-sysdeps`: protobuf, libjpeg-turbo, lmdb, libsndfile.
+  - `amdrocm-rocal`: pybind11, dlpack, rapidjson (vision-pack's bundled copies).
+  - `amdrocm-roccv`: pybind11, dlpack (rocCV's own vendored copies).
+  - `amdrocm-pydecode`: its own `LICENSE`, plus pybind11 and dlpack.
+  `validate_packages.sh` fails if a package ships a dep without its license.
+- RPM `License` tag now declares the pack's full license set
+  (`MIT AND BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later
+  AND Apache-2.0`) instead of a bare `MIT`, so the bundled packages no longer
+  under-declare their copyleft/third-party content. (Stock CPack has no
+  per-component RPM License override, so this is pack-wide.)
 
 ## [0.2.0] — 2026-09-24
 
