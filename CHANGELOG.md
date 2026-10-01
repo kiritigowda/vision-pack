@@ -20,16 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Bundled third-party dependencies now ship their license files, each in the
   package that carries its code, under `share/doc/<pkg>/licenses/<dep>/`:
-  - `amdrocm-vision-sysdeps`: protobuf, libjpeg-turbo, lmdb, libsndfile.
+  - `amdrocm-vision-sysdeps`: protobuf, libjpeg-turbo (`LICENSE.md` +
+    `README.ijg`), lmdb (`LICENSE` + `COPYRIGHT`), libsndfile.
   - `amdrocm-rocal`: pybind11, dlpack, rapidjson (vision-pack's bundled copies).
   - `amdrocm-roccv`: pybind11, dlpack (rocCV's own vendored copies).
   - `amdrocm-pydecode`: its own `LICENSE`, plus pybind11 and dlpack.
-  `validate_packages.sh` fails if a package ships a dep without its license.
-- RPM `License` tag now declares the pack's full license set
-  (`MIT AND BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later
-  AND Apache-2.0`) instead of a bare `MIT`, so the bundled packages no longer
-  under-declare their copyleft/third-party content. (Stock CPack has no
-  per-component RPM License override, so this is pack-wide.)
+  `validate_packages.sh` fails if a package ships a dep without its license,
+  including the split IJG/LMDB texts.
+- Each RPM's `License` tag now names exactly the licenses its payload carries
+  (e.g. `amdrocm-vision-sysdeps` →
+  `BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later`, the
+  vision libraries → `MIT`) instead of a bare `MIT` for everything. CPack has
+  no per-component License override, so it stamps the full superset onto every
+  RPM and `build_tools/relabel_rpm_licenses.sh` then narrows each one after
+  packaging.
 
 ## [0.2.0] — 2026-09-24
 

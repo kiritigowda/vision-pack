@@ -187,6 +187,19 @@ check_package() {
           echo "  ERROR: ${pkg} ships ${so} but no license for ${lic}"; fail=1
         fi
       done
+      # Some deps split their license across two files; both must ship:
+      #   libjpeg-turbo — LICENSE.md defers the IJG text to README.ijg.
+      #   lmdb          — LICENSE (OpenLDAP) needs the COPYRIGHT notice.
+      for want in "libjpeg-turbo/README.ijg:libturbojpeg-rocm-vision" \
+                  "lmdb/COPYRIGHT:liblmdb-rocm-vision"; do
+        lic="${want%%:*}"; so="${want##*:}"
+        echo "$paths" | grep -qE "${so}\.so" || continue
+        if echo "$paths" | grep -qE "share/doc/amdrocm-vision-sysdeps/licenses/${lic}"; then
+          echo "  license file ${lic}: OK"
+        else
+          echo "  ERROR: ${pkg} is missing required license file ${lic}"; fail=1
+        fi
+      done
       ;;
     amdrocm-rocal)
       if echo "$paths" | grep -qE "share/doc/amdrocm-rocal/licenses/"; then

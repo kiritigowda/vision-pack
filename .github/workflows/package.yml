@@ -87,9 +87,12 @@ jobs:
           # needs it (hosted runners have it, this container job does not).
           # --no-install-recommends skips ca-certificates, and without that
           # bundle gh rejects api.github.com (x509: unknown authority).
+          # rpmrebuild rewrites each RPM's License tag per package after CPack
+          # (CPack can only set one License for all components); it needs rpmbuild
+          # from the rpm package, already listed below.
           apt-get install -y --no-install-recommends \
             ca-certificates \
-            cmake dpkg-dev debhelper equivs rpm createrepo-c \
+            cmake dpkg-dev debhelper equivs rpm rpmrebuild createrepo-c \
             patchelf python3 curl jq git gh
           # This job also runs as root against a checkout owned by the runner
           # user; without this git refuses to read the repository and the
@@ -278,6 +281,14 @@ jobs:
         run: |
           cpack -G RPM --verbose
           ls -lh *.rpm 2>/dev/null || echo "No .rpm files produced"
+
+      - name: Narrow per-package RPM License tags
+        working-directory: pkg-build
+        run: |
+          # CPack writes the pack-wide license superset into every RPM; rewrite
+          # each to exactly what its payload carries. Self-verifying — fails if
+          # rpmrebuild silently no-ops. The Inspect step below shows the result.
+          bash "${GITHUB_WORKSPACE}/build_tools/relabel_rpm_licenses.sh" .
 
       - name: Inspect RPM metadata and payload
         working-directory: pkg-build

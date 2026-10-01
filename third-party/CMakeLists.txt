@@ -297,11 +297,17 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
     DESTINATION "${_vp_sysdeps_licdir}/protobuf" COMPONENT runtime)
 endif()
 if(VISION_PACK_BUNDLE_TURBOJPEG)
-  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/LICENSE.md"
+  # LICENSE.md defers the IJG license *text* to README.ijg, so both are needed.
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/LICENSE.md"
+      "${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/README.ijg"
     DESTINATION "${_vp_sysdeps_licdir}/libjpeg-turbo" COMPONENT runtime)
 endif()
 if(VISION_PACK_BUNDLE_LMDB)
-  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb/LICENSE"
+  # LICENSE is the OpenLDAP Public License; COPYRIGHT carries the notice it requires.
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb/LICENSE"
+      "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb/COPYRIGHT"
     DESTINATION "${_vp_sysdeps_licdir}/lmdb" COMPONENT runtime)
 endif()
 if(VISION_PACK_BUNDLE_LIBSNDFILE)
