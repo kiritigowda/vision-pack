@@ -87,12 +87,9 @@ jobs:
           # needs it (hosted runners have it, this container job does not).
           # --no-install-recommends skips ca-certificates, and without that
           # bundle gh rejects api.github.com (x509: unknown authority).
-          # rpmrebuild rewrites each RPM's License tag per package after CPack
-          # (CPack can only set one License for all components); it needs rpmbuild
-          # from the rpm package, already listed below.
           apt-get install -y --no-install-recommends \
             ca-certificates \
-            cmake dpkg-dev debhelper equivs rpm rpmrebuild createrepo-c \
+            cmake dpkg-dev debhelper equivs rpm createrepo-c \
             patchelf python3 curl jq git gh
           # This job also runs as root against a checkout owned by the runner
           # user; without this git refuses to read the repository and the
@@ -279,16 +276,25 @@ jobs:
       - name: Generate RPM packages
         working-directory: pkg-build
         run: |
-          cpack -G RPM --verbose
+          # CPackRPM has no per-component License tag — it reads only the global
+          # CPACK_RPM_PACKAGE_LICENSE. Build every RPM once as MIT, then re-emit
+          # just the packages that bundle third-party code with their precise
+          # license set (CPACK_COMPONENTS_ALL restricts each pass to those
+          # components; same NVRA → same filename → overwrites). The verify step
+          # below asserts every package ended up with the right tag.
+          cpack -G RPM --verbose -D CPACK_RPM_PACKAGE_LICENSE="MIT"
+          cpack -G RPM -D CPACK_COMPONENTS_ALL="rocm-sysdeps-vision" \
+            -D CPACK_RPM_PACKAGE_LICENSE="BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later"
+          cpack -G RPM -D CPACK_COMPONENTS_ALL="rocal;roccv;rocpydecode" \
+            -D CPACK_RPM_PACKAGE_LICENSE="MIT AND BSD-3-Clause AND Apache-2.0"
           ls -lh *.rpm 2>/dev/null || echo "No .rpm files produced"
 
-      - name: Narrow per-package RPM License tags
+      - name: Verify per-package RPM License tags
         working-directory: pkg-build
         run: |
-          # CPack writes the pack-wide license superset into every RPM; rewrite
-          # each to exactly what its payload carries. Self-verifying — fails if
-          # rpmrebuild silently no-ops. The Inspect step below shows the result.
-          bash "${GITHUB_WORKSPACE}/build_tools/relabel_rpm_licenses.sh" .
+          # Fail closed if a restricted pass above did not restrict (wrong
+          # license on every package) or a bundling package was missed.
+          bash "${GITHUB_WORKSPACE}/build_tools/verify_rpm_licenses.sh" .
 
       - name: Inspect RPM metadata and payload
         working-directory: pkg-build

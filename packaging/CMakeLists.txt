@@ -330,18 +330,20 @@ set(CPACK_DEBIAN_ROCPYDECODE-TEST_PACKAGE_DEPENDS
 set(CPACK_RPM_COMPONENT_INSTALL ON)
 set(CPACK_RPM_PACKAGE_RELEASE   "${VISION_PACK_BUILD_ID}")
 set(CPACK_RPM_PACKAGE_GROUP     "Development/Libraries")
-# RPM License tag — pre-relabel baseline. Stock CPack has no per-component
-# License override: CPackRPM reads only this global CPACK_RPM_PACKAGE_LICENSE
-# (its per-component spec-header fallback covers REQUIRES/PROVIDES/etc. but not
-# LICENSE), and CPACK_PROJECT_CONFIG_FILE is per-generator, not per-component.
-# So CPack stamps this one tag onto every RPM. We make it the full superset so
-# no package can under-declare its copyleft/third-party content; then
-# build_tools/relabel_rpm_licenses.sh (run from package.yml after `cpack -G RPM`)
-# narrows each package to exactly what its payload carries, so the pure-MIT
-# packages no longer over-declare. Per-package license *texts* ship under each
-# package's share/doc/<pkg>/licenses/ (see third-party/ and top-level CMakeLists).
-set(CPACK_RPM_PACKAGE_LICENSE
-    "MIT AND BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later AND Apache-2.0")
+# RPM License tag — default for the MIT-only packages (the vision libraries and
+# all -devel/-test/pythonpath packages). Stock CPack has no per-component License
+# override: CPackRPM reads only this global CPACK_RPM_PACKAGE_LICENSE (its
+# per-component spec-header fallback covers REQUIRES/PROVIDES/etc. but not
+# LICENSE), and CPACK_PROJECT_CONFIG_FILE is per-generator, not per-component. So
+# the packages that bundle third-party code (amdrocm-vision-sysdeps and
+# amdrocm-rocal/roccv/pydecode) are re-emitted by package.yml in extra
+# `cpack -G RPM` passes that override this with their precise license set, and
+# build_tools/verify_rpm_licenses.sh asserts every package's final tag. Keeping
+# the default at MIT means a plain `cpack -G RPM` (no override passes) still gives
+# the correct tag for every MIT package. Per-package license *texts* ship under
+# each package's share/doc/<pkg>/licenses/ (see third-party/ and top-level
+# CMakeLists).
+set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_URL       "https://github.com/kiritigowda/vision-pack")
 
 set(CPACK_RPM_MIVISIONX_PACKAGE_NAME            "amdrocm-mivisionx")

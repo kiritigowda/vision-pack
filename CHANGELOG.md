@@ -35,9 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (e.g. `amdrocm-vision-sysdeps` →
   `BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later`, the
   vision libraries → `MIT`) instead of a bare `MIT` for everything. CPack has
-  no per-component License override, so it stamps the full superset onto every
-  RPM and `build_tools/relabel_rpm_licenses.sh` then narrows each one after
-  packaging.
+  no per-component License override, so packaging builds all RPMs as `MIT` then
+  re-emits the bundling packages in extra `cpack -G RPM` passes with their
+  precise license; `build_tools/verify_rpm_licenses.sh` asserts every package's
+  final tag.
 
 ## [0.2.0] — 2026-09-24
 
