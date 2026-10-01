@@ -186,6 +186,13 @@ function(vision_pack_subproject_activate)
         "-DCMAKE_PREFIX_PATH=${_prefix_path_str}"
         # Inject our generated finders (FindRapidJSON.cmake etc.) into sub-builds
         "-DCMAKE_MODULE_PATH=${VISION_PACK_FINDERS_DIR}"
+        # gcc-toolset's libstdc++.so is a linker script. Symbols newer than the
+        # image's GCC 8 libstdc++ come from libstdc++_nonshared.a and are
+        # exported unless excluded, so they interpose libstdc++.so.6 (#74).
+        # No-op on a normal libstdc++ that does not link that archive.
+        # SHARED covers libopenvx and libroccv; MODULE covers the pybind modules.
+        "-DCMAKE_SHARED_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a"
+        "-DCMAKE_MODULE_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a"
         ${_cmake_args}
 
       BUILD_COMMAND
