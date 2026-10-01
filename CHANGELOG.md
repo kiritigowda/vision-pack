@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package version derivation matches only release tags (`v1.2.3` / `1.2.3`),
   so a `nightly-YYYYMMDD` prerelease tag no longer yields a non-numeric version
   (e.g. `nightly-20260926-3-gSHA`) that CPack rejects.
+- `Findrocal.cmake` now exports both `include/rocal` and the parent
+  `include/` on `rocal::rocal`, so both the unprefixed `#include
+  "rocal_api.h"` form rocAL's own sources/tests use and the namespaced
+  `#include <rocal/rocal_api.h>` form compile (#78).
 
 ## [0.2.0] — 2026-09-24
 
