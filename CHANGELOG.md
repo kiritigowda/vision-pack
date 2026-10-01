@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Bundled LMDB downgraded from 1.0.1 to 0.9.31 (Ubuntu's shipped version) —
+  1.0.1's incompatible on-disk format (`MDB_DATA_VERSION` 3) broke rocAL's
+  Caffe/Caffe2 LMDB readers on 0.9-format databases (`MDB_DATA_VERSION` 1);
+  0.9.31 is the same version Ubuntu ships as `liblmdb0` (#58).
 - Nightly packaging installs `gh` and `ca-certificates` in the Ubuntu
   container, grants `contents: write`, and publishes the prerelease with
   `GH_REPO` plus `--target` so `gh` does not need a local git checkout.
