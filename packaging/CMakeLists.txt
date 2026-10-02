@@ -157,6 +157,11 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/amd"
 install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/rocal/LICENSE.txt"
     DESTINATION share/doc/amdrocm-rocal COMPONENT rocal OPTIONAL
 )
+# Licenses of the bundled header-only deps compiled into rocAL (staged by
+# third-party/): pybind11, dlpack, rapidjson.
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-rocal/licenses"
+    DESTINATION share/doc/amdrocm-rocal COMPONENT rocal OPTIONAL
+)
 # --- rocAL dev: include/rocal/ ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/include/rocal"
     DESTINATION include COMPONENT rocal-dev
@@ -178,6 +183,11 @@ vision_pack_install_matched(roccv lib
   "${VISION_PACK_STAGING_DIR}/lib/rocpycv.pyi"
 )
 install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/roccv/LICENSE.txt"
+    DESTINATION share/doc/amdrocm-roccv COMPONENT roccv OPTIONAL
+)
+# Licenses of the vendored deps compiled into rocpycv (staged by top-level
+# CMakeLists): pybind11, dlpack.
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-roccv/licenses"
     DESTINATION share/doc/amdrocm-roccv COMPONENT roccv OPTIONAL
 )
 # --- rocCV dev: include/roccv/ + lib/cmake/roccv/ ---
@@ -211,6 +221,14 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/pyRocVideoDecode"
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/pyRocJpegDecode"
     DESTINATION lib COMPONENT rocpydecode
 )
+# rocPyDecode's own LICENSE + vendored dep licenses (pybind11, dlpack) compiled
+# into rocpydecode/rocpyjpegdecode (staged by top-level CMakeLists).
+install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-pydecode/LICENSE.txt"
+    DESTINATION share/doc/amdrocm-pydecode COMPONENT rocpydecode OPTIONAL
+)
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-pydecode/licenses"
+    DESTINATION share/doc/amdrocm-pydecode COMPONENT rocpydecode OPTIONAL
+)
 # --- rocPyDecode test ---
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpydecode/tests"
     DESTINATION share/rocpydecode COMPONENT rocpydecode-test OPTIONAL
@@ -231,6 +249,10 @@ vision_pack_install_matched(rocm-sysdeps-vision lib/rocm_sysdeps/lib
   "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libprotobuf-lite-rocm-vision.so*"
   "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/liblmdb-rocm-vision.so*"
   "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libsndfile-rocm-vision.so*"
+)
+# Licenses of the bundled deps shipped in this package (staged by third-party/).
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/doc/amdrocm-vision-sysdeps/licenses"
+    DESTINATION share/doc/amdrocm-vision-sysdeps COMPONENT rocm-sysdeps-vision OPTIONAL
 )
 
 # --- Python path registration (.pth) → host site-packages (#4) ---
@@ -308,7 +330,20 @@ set(CPACK_DEBIAN_ROCPYDECODE-TEST_PACKAGE_DEPENDS
 set(CPACK_RPM_COMPONENT_INSTALL ON)
 set(CPACK_RPM_PACKAGE_RELEASE   "${VISION_PACK_BUILD_ID}")
 set(CPACK_RPM_PACKAGE_GROUP     "Development/Libraries")
-set(CPACK_RPM_PACKAGE_LICENSE   "MIT")
+# RPM License tag — default for the MIT-only packages (the vision libraries and
+# all -devel/-test/pythonpath packages). Stock CPack has no per-component License
+# override: CPackRPM reads only this global CPACK_RPM_PACKAGE_LICENSE (its
+# per-component spec-header fallback covers REQUIRES/PROVIDES/etc. but not
+# LICENSE), and CPACK_PROJECT_CONFIG_FILE is per-generator, not per-component. So
+# the packages that bundle third-party code (amdrocm-vision-sysdeps and
+# amdrocm-rocal/roccv/pydecode) are re-emitted by package.yml in extra
+# `cpack -G RPM` passes that override this with their precise license set, and
+# build_tools/verify_rpm_licenses.sh asserts every package's final tag. Keeping
+# the default at MIT means a plain `cpack -G RPM` (no override passes) still gives
+# the correct tag for every MIT package. Per-package license *texts* ship under
+# each package's share/doc/<pkg>/licenses/ (see third-party/ and top-level
+# CMakeLists).
+set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_URL       "https://github.com/kiritigowda/vision-pack")
 
 set(CPACK_RPM_MIVISIONX_PACKAGE_NAME            "amdrocm-mivisionx")
