@@ -195,11 +195,11 @@ if(VISION_PACK_ENABLE_ROCAL)
 
   if(VISION_PACK_ENABLE_MIVISIONX)
     list(APPEND _rocal_deps mivisionx)
+    # rocAL's FindMIVisionX.cmake searches ${MIVisionX_PATH}/{include,lib},
+    # not CMAKE_PREFIX_PATH. Point it at the mivisionx stage prefix and let
+    # the finder resolve libopenvx / libvx_rpp / headers (#9).
     list(APPEND _rocal_cmake_args
-      "-DOPENVX_LIBRARIES=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/lib/libopenvx.so"
-      "-DVXRPP_LIBRARIES=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/lib/libvx_rpp.so"
-      "-DMIVisionX_INCLUDE_DIRS=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage/include/mivisionx"
-      "-DMIVisionX_FOUND=TRUE"
+      "-DMIVisionX_PATH=${CMAKE_BINARY_DIR}/_subprojects/mivisionx/stage"
     )
   endif()
 
