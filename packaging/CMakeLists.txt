@@ -39,6 +39,9 @@ endif()
 
 set(VP_VER  "${VISION_PACK_VERSION}")
 set(VP_ROCM "${VISION_PACK_ROCM_VERSION}")
+# TheRock nightlies are 10.2.0~DATE, which dpkg and rpm sort before 10.2.0.
+# A trailing tilde makes the lower bound accept those pre-release versions.
+set(VP_ROCM_MIN "${VP_ROCM}~")
 
 # ---------------------------------------------------------------------------
 # CPack global settings
@@ -298,29 +301,31 @@ set(CPACK_DEBIAN_PYTHONPATH_PACKAGE_NAME           "amdrocm-vision-pythonpath")
 # The three Python-binding packages pull in amdrocm-vision-pythonpath so
 # `import rocal` / `import rocpycv` / `import rocpydecode` work with no PYTHONPATH.
 set(CPACK_DEBIAN_MIVISIONX_PACKAGE_DEPENDS
-    "amdrocm-rpp (>= ${VP_ROCM}), hip-runtime-amd (>= ${VP_ROCM})")
+    "amdrocm-rpp (>= ${VP_ROCM_MIN}), amdrocm-runtime (>= ${VP_ROCM_MIN}) | amdrocm-runtime10.2 (>= ${VP_ROCM_MIN})")
 set(CPACK_DEBIAN_ROCAL_PACKAGE_DEPENDS
-    "amdrocm-mivisionx (>= ${VP_VER}), amdrocm-vision-sysdeps (>= ${VP_VER}), amdrocm-vision-pythonpath (>= ${VP_VER}), amdrocm-decode (>= ${VP_ROCM}), amdrocm-jpeg (>= ${VP_ROCM})")
+    "amdrocm-mivisionx (>= ${VP_VER}), amdrocm-vision-sysdeps (>= ${VP_VER}), amdrocm-vision-pythonpath (>= ${VP_VER}), amdrocm-decode (>= ${VP_ROCM_MIN}), amdrocm-jpeg (>= ${VP_ROCM_MIN}), amdrocm-hipfile10.2 (>= ${VP_ROCM_MIN})")
 set(CPACK_DEBIAN_ROCCV_PACKAGE_DEPENDS
-    "amdrocm-vision-pythonpath (>= ${VP_VER}), hip-runtime-amd (>= ${VP_ROCM})")
+    "amdrocm-vision-pythonpath (>= ${VP_VER}), amdrocm-runtime (>= ${VP_ROCM_MIN}) | amdrocm-runtime10.2 (>= ${VP_ROCM_MIN})")
 set(CPACK_DEBIAN_ROCPYDECODE_PACKAGE_DEPENDS
-    "amdrocm-vision-pythonpath (>= ${VP_VER}), amdrocm-decode (>= ${VP_ROCM}), amdrocm-jpeg (>= ${VP_ROCM})")
+    "amdrocm-vision-pythonpath (>= ${VP_VER}), amdrocm-decode (>= ${VP_ROCM_MIN}), amdrocm-jpeg (>= ${VP_ROCM_MIN})")
 
 # A -devel package is useless without the runtime it links against, and a -test
-# package without the runtime it exercises. rocAL headers include MIVisionX
-# headers, so its -devel also pulls amdrocm-mivisionx-devel.
+# package without the runtime it exercises. The C/C++ test sources also need
+# the headers, CMake config, and samples from the matching -devel package.
+# rocAL headers include MIVisionX headers, so its -devel also pulls
+# amdrocm-mivisionx-devel.
 set(CPACK_DEBIAN_MIVISIONX-DEV_PACKAGE_DEPENDS
     "amdrocm-mivisionx (>= ${VP_VER})")
 set(CPACK_DEBIAN_MIVISIONX-TEST_PACKAGE_DEPENDS
-    "amdrocm-mivisionx (>= ${VP_VER})")
+    "amdrocm-mivisionx (>= ${VP_VER}), amdrocm-mivisionx-devel (>= ${VP_VER})")
 set(CPACK_DEBIAN_ROCAL-DEV_PACKAGE_DEPENDS
     "amdrocm-rocal (>= ${VP_VER}), amdrocm-mivisionx-devel (>= ${VP_VER})")
 set(CPACK_DEBIAN_ROCAL-TEST_PACKAGE_DEPENDS
-    "amdrocm-rocal (>= ${VP_VER})")
+    "amdrocm-rocal (>= ${VP_VER}), amdrocm-rocal-devel (>= ${VP_VER})")
 set(CPACK_DEBIAN_ROCCV-DEV_PACKAGE_DEPENDS
     "amdrocm-roccv (>= ${VP_VER})")
 set(CPACK_DEBIAN_ROCCV-TEST_PACKAGE_DEPENDS
-    "amdrocm-roccv (>= ${VP_VER})")
+    "amdrocm-roccv (>= ${VP_VER}), amdrocm-roccv-devel (>= ${VP_VER})")
 set(CPACK_DEBIAN_ROCPYDECODE-TEST_PACKAGE_DEPENDS
     "amdrocm-pydecode (>= ${VP_VER})")
 
@@ -366,25 +371,25 @@ set(CPACK_RPM_PYTHONPATH_POST_INSTALL_SCRIPT_FILE
 # Requires mirror the DEB Depends above. Without them the RPMs declared no
 # dependencies at all and would install onto a host with no ROCm present.
 set(CPACK_RPM_MIVISIONX_PACKAGE_REQUIRES
-    "amdrocm-rpp >= ${VP_ROCM}, hip-runtime-amd >= ${VP_ROCM}")
+    "amdrocm-rpp >= ${VP_ROCM_MIN}, (amdrocm-runtime >= ${VP_ROCM_MIN} or amdrocm-runtime10.2 >= ${VP_ROCM_MIN})")
 set(CPACK_RPM_ROCAL_PACKAGE_REQUIRES
-    "amdrocm-mivisionx >= ${VP_VER}, amdrocm-vision-sysdeps >= ${VP_VER}, amdrocm-vision-pythonpath >= ${VP_VER}, amdrocm-decode >= ${VP_ROCM}, amdrocm-jpeg >= ${VP_ROCM}")
+    "amdrocm-mivisionx >= ${VP_VER}, amdrocm-vision-sysdeps >= ${VP_VER}, amdrocm-vision-pythonpath >= ${VP_VER}, amdrocm-decode >= ${VP_ROCM_MIN}, amdrocm-jpeg >= ${VP_ROCM_MIN}")
 set(CPACK_RPM_ROCCV_PACKAGE_REQUIRES
-    "amdrocm-vision-pythonpath >= ${VP_VER}, hip-runtime-amd >= ${VP_ROCM}")
+    "amdrocm-vision-pythonpath >= ${VP_VER}, (amdrocm-runtime >= ${VP_ROCM_MIN} or amdrocm-runtime10.2 >= ${VP_ROCM_MIN})")
 set(CPACK_RPM_ROCPYDECODE_PACKAGE_REQUIRES
-    "amdrocm-vision-pythonpath >= ${VP_VER}, amdrocm-decode >= ${VP_ROCM}, amdrocm-jpeg >= ${VP_ROCM}")
+    "amdrocm-vision-pythonpath >= ${VP_VER}, amdrocm-decode >= ${VP_ROCM_MIN}, amdrocm-jpeg >= ${VP_ROCM_MIN}")
 set(CPACK_RPM_MIVISIONX-DEV_PACKAGE_REQUIRES
     "amdrocm-mivisionx >= ${VP_VER}")
 set(CPACK_RPM_MIVISIONX-TEST_PACKAGE_REQUIRES
-    "amdrocm-mivisionx >= ${VP_VER}")
+    "amdrocm-mivisionx >= ${VP_VER}, amdrocm-mivisionx-devel >= ${VP_VER}")
 set(CPACK_RPM_ROCAL-DEV_PACKAGE_REQUIRES
     "amdrocm-rocal >= ${VP_VER}, amdrocm-mivisionx-devel >= ${VP_VER}")
 set(CPACK_RPM_ROCAL-TEST_PACKAGE_REQUIRES
-    "amdrocm-rocal >= ${VP_VER}")
+    "amdrocm-rocal >= ${VP_VER}, amdrocm-rocal-devel >= ${VP_VER}")
 set(CPACK_RPM_ROCCV-DEV_PACKAGE_REQUIRES
     "amdrocm-roccv >= ${VP_VER}")
 set(CPACK_RPM_ROCCV-TEST_PACKAGE_REQUIRES
-    "amdrocm-roccv >= ${VP_VER}")
+    "amdrocm-roccv >= ${VP_VER}, amdrocm-roccv-devel >= ${VP_VER}")
 set(CPACK_RPM_ROCPYDECODE-TEST_PACKAGE_REQUIRES
     "amdrocm-pydecode >= ${VP_VER}")
 

@@ -186,6 +186,12 @@ function(vision_pack_subproject_activate)
         "-DCMAKE_PREFIX_PATH=${_prefix_path_str}"
         # Inject our generated finders (FindRapidJSON.cmake etc.) into sub-builds
         "-DCMAKE_MODULE_PATH=${VISION_PACK_FINDERS_DIR}"
+        # TheRock's amdclang config passes -frtlib-add-rpath, which bakes the
+        # build machine's compiler runtime directories into RUNPATH. runvx is
+        # the shipped binary that keeps those absolute entries (#72). This
+        # flag overrides the config; CMake's $ORIGIN install RPATH stays.
+        "-DCMAKE_C_FLAGS:STRING=-fno-rtlib-add-rpath"
+        "-DCMAKE_CXX_FLAGS:STRING=-fno-rtlib-add-rpath"
         ${_cmake_args}
 
       BUILD_COMMAND

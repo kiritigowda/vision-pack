@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package version derivation matches only release tags (`v1.2.3` / `1.2.3`),
   so a `nightly-YYYYMMDD` prerelease tag no longer yields a non-numeric version
   (e.g. `nightly-20260926-3-gSHA`) that CPack rejects.
+- `FindMIVisionX.cmake`'s `find_path()` NAMES ordering no longer short-circuits
+  past `PATH_SUFFIXES`, so `MIVisionX_INCLUDE_DIRS` resolves to
+  `include/mivisionx` instead of `include/`, and consumers of
+  `MIVisionX::MIVisionX` can compile `#include <VX/vx.h>` (#63).
 
 ### Added
 - Bundled third-party dependencies now ship their license files, each in the
