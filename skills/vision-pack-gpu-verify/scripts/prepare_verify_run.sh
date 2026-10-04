@@ -147,6 +147,9 @@ else
 fi
 
 mkdir -p "$DEST_DIR/debs"
+# Remove stale DEBs from previous runs so a new nightly date doesn't mix with old packages.
+rm -f "$DEST_DIR/debs"/amdrocm-vision-*.deb
+
 for u in "${REAL_DEBS[@]}"; do
   fname=$(basename "$u")
   dest="$DEST_DIR/debs/$fname"
