@@ -27,8 +27,8 @@ MIVisionX, rocAL, rocCV, and the rocPyDecode smoke test.
 
 ```bash
 ./skills/vision-pack-gpu-verify/scripts/prepare_verify_run.sh \
-  --vision-pack-date 20261003 \
-  --rock-date 20261003 \
+  --vision-pack-date 20261004 \
+  --rock-date 20261004 \
   --dest ./verify-run \
   --run-container \
   --force-privileged
@@ -38,8 +38,8 @@ To see what would be downloaded without fetching anything:
 
 ```bash
 ./skills/vision-pack-gpu-verify/scripts/prepare_verify_run.sh \
-  --vision-pack-date 20261003 \
-  --rock-date 20261003 \
+  --vision-pack-date 20261004 \
+  --rock-date 20261004 \
   --dest ./verify-run \
   --dry-run
 ```
@@ -47,14 +47,19 @@ To see what would be downloaded without fetching anything:
 ## How it works
 
 1. Resolve the vision-pack nightly release from `kiritigowda/vision-pack`.
-2. Download the matching TheRock SDK tarball from `nightly.repo.amd.com`.
-3. Download the 11 vision-pack DEBs (runtime, dev, test packages plus
-   `pythonpath` and `rocm-sysdeps`).
+2. Download the matching TheRock SDK tarball from `nightly.repo.amd.com`
+   (the SDK date should match the vision-pack nightly date; mixing versions
+   causes runtime failures such as `vxPublishKernels(vx_rpp) failed`).
+3. Download the 13 vision-pack DEBs (runtime, dev, test packages plus
+   `pythonpath`, `rocm-sysdeps-vision`, and `rocpydecode`).
 4. Launch an Ubuntu 24.04 container with `--privileged` and GPU devices passed
    through.
 5. Extract the SDK into `/opt/rocm`, then install the DEBs with
    `dpkg --force-depends -i` (the runtime files come from the SDK; the missing
-   metadata-only ROCm dependencies are not available in Ubuntu repos).
+   metadata-only ROCm dependencies are not available in Ubuntu repos). This
+   leaves `apt` in a broken-dependency state inside the container, which is
+   harmless for the single-purpose verification run but will block later
+   `apt-get install` commands unless dependencies are satisfied another way.
 6. Build and run each library's test suite via CMake/CTest.
 
 ## Notes / known issues

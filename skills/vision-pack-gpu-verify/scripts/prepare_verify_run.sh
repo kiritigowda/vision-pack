@@ -109,6 +109,7 @@ for a in json.load(sys.stdin):
 
 DEBS=(
   "$(filter_deb 'Linux-pythonpath')"
+  "$(filter_deb 'Linux-rocm-sysdeps-vision')"
   "$(filter_deb 'Linux-mivisionx.deb')"
   "$(filter_deb 'Linux-mivisionx-dev')"
   "$(filter_deb 'Linux-mivisionx-test')"
