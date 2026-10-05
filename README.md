@@ -310,13 +310,25 @@ stage directory. Those resolve to nothing on a user's machine yet are searched
 the build if any shipped `.so` carries an absolute or empty RPATH entry.
 
 **Side-by-side SONAME isolation:** packaged bundled deps ship under private
-`-rocm-vision` SONAMEs (`libturbojpeg-rocm-vision.so`, …) so a host copy of
-turbojpeg/protobuf/lmdb/sndfile on the default loader path can never shadow the
-vendored build. `librocal.so` / `rocal_pybind.so` are patched to reference
-these names, and an isolated `libjpeg-rocm-vision.so` is added because rocAL
-calls the raw libjpeg API (`jpeg_std_error`) that libturbojpeg does not export.
-The rename is a post-staging pass (`build_tools/rewrite_sonames.py`) run before
-CPack ([ADR 0004](docs/adr/0004-soname-isolation.md)).
+`-rocm-vision` SONAMEs (`libturbojpeg-rocm-vision.so`, …), so a host copy of
+turbojpeg/protobuf/lmdb/sndfile on the default loader path is never loaded *in
+place of* the vendored build. `librocal.so` / `rocal_pybind.so` are patched to
+reference these names, and `librocal.so` is linked against the isolated
+`libjpeg-rocm-vision.so` because rocAL calls the raw libjpeg API
+(`jpeg_std_error`) that libturbojpeg does not export. The rename is a
+post-staging pass (`build_tools/rewrite_sonames.py`) run before CPack
+([ADR 0004](docs/adr/0004-soname-isolation.md)).
+
+**Symbol binding:** a SONAME rename does not stop the dynamic loader binding
+`librocal`'s calls to a host copy that is already in the process (an application
+linked against the system libjpeg, `LD_PRELOAD`, a `RTLD_GLOBAL` library), which
+can silently return corrupt results. libjpeg, libturbojpeg and libsndfile are
+therefore linked with one private symbol-version node (`AMDROCM_VISION_1.0`)
+that no host library defines, and `rewrite_sonames.py` fails the build if they
+or `librocal.so` use a stock node. **LMDB and protobuf are not covered:** common
+distributions ship them without version information, which version nodes cannot
+isolate, so a host copy loaded first can still satisfy `librocal`'s calls to
+them.
 
 **Dependencies come from the tree, not the host.** Bundled deps are built
 without external codecs (`protobuf_WITH_ZLIB=OFF`, libsndfile

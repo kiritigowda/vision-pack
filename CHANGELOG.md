@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   past `PATH_SUFFIXES`, so `MIVisionX_INCLUDE_DIRS` resolves to
   `include/mivisionx` instead of `include/`, and consumers of
   `MIVisionX::MIVisionX` can compile `#include <VX/vx.h>` (#63).
+- The bundled libjpeg, libturbojpeg and libsndfile are linked with a private
+  symbol-version node (`AMDROCM_VISION_1.0`), and `librocal.so` is now linked
+  against libjpeg directly, so a host copy already loaded in the process (e.g.
+  an application using the system libjpeg) can no longer capture librocal's
+  calls and silently return all-zero batches. `rewrite_sonames.py` fails the
+  build if a stock version node remains, and the RPM `Provides` of
+  `amdrocm-vision-sysdeps` declare the renamed capabilities (#66). LMDB and
+  protobuf are unversioned on common distributions and are not covered yet.
 
 ### Added
 - Bundled third-party dependencies now ship their license files, each in the
