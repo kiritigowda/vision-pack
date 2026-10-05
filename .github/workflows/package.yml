@@ -276,8 +276,25 @@ jobs:
       - name: Generate RPM packages
         working-directory: pkg-build
         run: |
-          cpack -G RPM --verbose
+          # CPackRPM has no per-component License tag — it reads only the global
+          # CPACK_RPM_PACKAGE_LICENSE. Build every RPM once as MIT, then re-emit
+          # just the packages that bundle third-party code with their precise
+          # license set (CPACK_COMPONENTS_ALL restricts each pass to those
+          # components; same NVRA → same filename → overwrites). The verify step
+          # below asserts every package ended up with the right tag.
+          cpack -G RPM --verbose -D CPACK_RPM_PACKAGE_LICENSE="MIT"
+          cpack -G RPM -D CPACK_COMPONENTS_ALL="rocm-sysdeps-vision" \
+            -D CPACK_RPM_PACKAGE_LICENSE="BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later"
+          cpack -G RPM -D CPACK_COMPONENTS_ALL="rocal;roccv;rocpydecode" \
+            -D CPACK_RPM_PACKAGE_LICENSE="MIT AND BSD-3-Clause AND Apache-2.0"
           ls -lh *.rpm 2>/dev/null || echo "No .rpm files produced"
+
+      - name: Verify per-package RPM License tags
+        working-directory: pkg-build
+        run: |
+          # Fail closed if a restricted pass above did not restrict (wrong
+          # license on every package) or a bundling package was missed.
+          bash "${GITHUB_WORKSPACE}/build_tools/verify_rpm_licenses.sh" .
 
       - name: Inspect RPM metadata and payload
         working-directory: pkg-build

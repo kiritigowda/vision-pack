@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Bundled LMDB downgraded from 1.0.1 to 0.9.31 (Ubuntu's shipped version) —
+  1.0.1's incompatible on-disk format (`MDB_DATA_VERSION` 3) broke rocAL's
+  Caffe/Caffe2 LMDB readers on 0.9-format databases (`MDB_DATA_VERSION` 1);
+  0.9.31 is the same version Ubuntu ships as `liblmdb0` (#58).
 - Nightly packaging installs `gh` and `ca-certificates` in the Ubuntu
   container, grants `contents: write`, and publishes the prerelease with
   `GH_REPO` plus `--target` so `gh` does not need a local git checkout.
@@ -16,10 +20,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package version derivation matches only release tags (`v1.2.3` / `1.2.3`),
   so a `nightly-YYYYMMDD` prerelease tag no longer yields a non-numeric version
   (e.g. `nightly-20260926-3-gSHA`) that CPack rejects.
+- `FindMIVisionX.cmake`'s `find_path()` NAMES ordering no longer short-circuits
+  past `PATH_SUFFIXES`, so `MIVisionX_INCLUDE_DIRS` resolves to
+  `include/mivisionx` instead of `include/`, and consumers of
+  `MIVisionX::MIVisionX` can compile `#include <VX/vx.h>` (#63).
 - `amdrocm-vision-sysdeps` now declares the versioned-symbol `Provides` that
   `rpm`'s dependency generator could not derive from the SONAME-isolated
   `libturbojpeg`/`libsndfile`, so `amdrocm-rocal` installs from the RPM set
   without `--nodeps` (#61).
+
+### Added
+- Bundled third-party dependencies now ship their license files, each in the
+  package that carries its code, under `share/doc/<pkg>/licenses/<dep>/`:
+  - `amdrocm-vision-sysdeps`: protobuf, libjpeg-turbo (`LICENSE.md` +
+    `README.ijg`), lmdb (`LICENSE` + `COPYRIGHT`), libsndfile.
+  - `amdrocm-rocal`: pybind11, dlpack, rapidjson (vision-pack's bundled copies).
+  - `amdrocm-roccv`: pybind11, dlpack (rocCV's own vendored copies).
+  - `amdrocm-pydecode`: its own `LICENSE`, plus pybind11 and dlpack.
+  `validate_packages.sh` fails if a package ships a dep without its license,
+  including the split IJG/LMDB texts.
+- Each RPM's `License` tag now names exactly the licenses its payload carries
+  (e.g. `amdrocm-vision-sysdeps` →
+  `BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later`, the
+  vision libraries → `MIT`) instead of a bare `MIT` for everything. CPack has
+  no per-component License override, so packaging builds all RPMs as `MIT` then
+  re-emits the bundling packages in extra `cpack -G RPM` passes with their
+  precise license; `build_tools/verify_rpm_licenses.sh` asserts every package's
+  final tag.
 
 ## [0.2.0] — 2026-09-24
 

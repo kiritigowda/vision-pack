@@ -18,8 +18,13 @@
 # <prefix>/lib/cmake/FindMIVisionX.cmake → <prefix>
 get_filename_component(_mvx_prefix "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 
+# NAMES must list only the bare header name, not a mivisionx/-prefixed
+# alternative: find_path() tries NAMES entries in order, and a
+# mivisionx/-prefixed name resolves directly under the HINTS dir on its own,
+# short-circuiting before PATH_SUFFIXES ever gets applied — which is exactly
+# what silently pointed this at include/ instead of include/mivisionx (#63).
 find_path(MIVisionX_INCLUDE_DIR
-  NAMES mivisionx/vx_ext_rpp.h vx_ext_rpp.h
+  NAMES vx_ext_rpp.h
   HINTS "${_mvx_prefix}/include" "${ROCM_PATH}/include"
   PATH_SUFFIXES mivisionx
 )

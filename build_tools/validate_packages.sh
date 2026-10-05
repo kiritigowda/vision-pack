@@ -164,6 +164,83 @@ check_package() {
     done
   fi
 
+  # --- bundled-dependency licenses ------------------------------------------
+  # A bundled dep must ship its license. Enforce this only from evidence that
+  # the dep was actually bundled, so a distro build against system copies
+  # (VISION_PACK_BUNDLE_*=OFF) is not wrongly rejected:
+  #   sysdeps  — key off each renamed runtime .so that shipped.
+  #   rocAL/rocCV/rocPyDecode — header-only deps leave no file, so key off the
+  #              licenses/ dir: if it shipped it must be complete; if absent
+  #              (system copies), skip. rocPyDecode must also ship its own LICENSE.
+  local dep so lic
+  case "$pkg" in
+    amdrocm-vision-sysdeps)
+      for dep in "libprotobuf-rocm-vision:protobuf" \
+                 "libturbojpeg-rocm-vision:libjpeg-turbo" \
+                 "liblmdb-rocm-vision:lmdb" \
+                 "libsndfile-rocm-vision:libsndfile"; do
+        so="${dep%%:*}"; lic="${dep##*:}"
+        echo "$paths" | grep -qE "${so}\.so" || continue
+        if echo "$paths" | grep -qE "share/doc/amdrocm-vision-sysdeps/licenses/${lic}/"; then
+          echo "  license for ${lic}: OK"
+        else
+          echo "  ERROR: ${pkg} ships ${so} but no license for ${lic}"; fail=1
+        fi
+      done
+      # Some deps split their license across two files; both must ship:
+      #   libjpeg-turbo — LICENSE.md defers the IJG text to README.ijg.
+      #   lmdb          — LICENSE (OpenLDAP) needs the COPYRIGHT notice.
+      for want in "libjpeg-turbo/README.ijg:libturbojpeg-rocm-vision" \
+                  "lmdb/COPYRIGHT:liblmdb-rocm-vision"; do
+        lic="${want%%:*}"; so="${want##*:}"
+        echo "$paths" | grep -qE "${so}\.so" || continue
+        if echo "$paths" | grep -qE "share/doc/amdrocm-vision-sysdeps/licenses/${lic}"; then
+          echo "  license file ${lic}: OK"
+        else
+          echo "  ERROR: ${pkg} is missing required license file ${lic}"; fail=1
+        fi
+      done
+      ;;
+    amdrocm-rocal)
+      if echo "$paths" | grep -qE "share/doc/amdrocm-rocal/licenses/"; then
+        for lic in pybind11 dlpack rapidjson; do
+          if echo "$paths" | grep -qE "share/doc/amdrocm-rocal/licenses/${lic}/"; then
+            echo "  license for ${lic}: OK"
+          else
+            echo "  ERROR: ${pkg} ships bundled-dep licenses but not ${lic}"; fail=1
+          fi
+        done
+      fi
+      ;;
+    amdrocm-roccv)
+      if echo "$paths" | grep -qE "share/doc/amdrocm-roccv/licenses/"; then
+        for lic in pybind11 dlpack; do
+          if echo "$paths" | grep -qE "share/doc/amdrocm-roccv/licenses/${lic}/"; then
+            echo "  license for ${lic}: OK"
+          else
+            echo "  ERROR: ${pkg} ships vendored-dep licenses but not ${lic}"; fail=1
+          fi
+        done
+      fi
+      ;;
+    amdrocm-pydecode)
+      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/LICENSE"; then
+        echo "  rocPyDecode LICENSE: OK"
+      else
+        echo "  ERROR: ${pkg} ships no LICENSE text"; fail=1
+      fi
+      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/licenses/"; then
+        for lic in pybind11 dlpack; do
+          if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/licenses/${lic}/"; then
+            echo "  license for ${lic}: OK"
+          else
+            echo "  ERROR: ${pkg} ships vendored-dep licenses but not ${lic}"; fail=1
+          fi
+        done
+      fi
+      ;;
+  esac
+
   # --- empty directories (#55) ----------------------------------------------
   # A directory with no file under it belongs to another component. Shipping
   # it makes `import amd.rocal` succeed when only amdrocm-roccv is installed.
