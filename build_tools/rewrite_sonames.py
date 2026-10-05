@@ -27,8 +27,17 @@ Usage:
 <staging-root> is the install tree that mirrors /opt/rocm (e.g. build/staging),
 containing lib/librocal.so and lib/rocm_sysdeps/lib/.
 
+Renaming a SONAME only controls which file the loader opens; which definition a
+call binds to is decided by symbol name and version node. The bundled libjpeg,
+libturbojpeg and libsndfile are therefore linked with a private version node
+(third-party/CMakeLists.txt, #66), and this script verifies that they define it
+and that librocal.so requests it. patchelf cannot rewrite version definitions, so
+the nodes cannot be fixed up here. LMDB and protobuf carry no version
+information on common distributions and are not covered.
+
 Idempotent: re-running on an already-rewritten tree is a no-op. Exits non-zero
-if patchelf is missing or any consumer still lists a stock bundled SONAME.
+if patchelf or readelf is missing, any consumer still lists a stock bundled
+SONAME, or a version-node check fails.
 """
 import argparse
 import os
@@ -50,6 +59,18 @@ SYSDEP_STEMS = [
 ]
 
 SUFFIX = "-rocm-vision"
+
+# Symbol-version node the bundled libjpeg, libturbojpeg and libsndfile are linked
+# with (third-party/CMakeLists.txt, VP_PRIVATE_VERSION_NODE; #66). Renaming a
+# SONAME only controls which file gets loaded. Which definition a call binds to
+# is decided by symbol name and version node, so a host copy already in the
+# process wins unless the bundled libs define a node no host library does.
+# patchelf cannot rewrite version definitions, so this pass only verifies them.
+PRIVATE_VERSION_NODE = "AMDROCM_VISION_1.0"
+
+# Bundled libs that are linked with that node. LMDB and protobuf are unversioned
+# on common distributions, which version nodes cannot isolate (#66 follow-up).
+VERSIONED_STEMS = ["jpeg", "turbojpeg", "sndfile"]
 
 # Consumers (relative to staging root) that may carry a DT_NEEDED on the
 # bundled sysdeps and must have those references rewritten. rocal_pybind.so
@@ -255,6 +276,10 @@ def patch_consumers(root, sysdeps_dir, soname_map):
             if old_soname in needed:
                 _run(["patchelf", "--replace-needed", old_soname, new_soname, str(consumer)])
                 print(f"  {consumer.name}: NEEDED {old_soname} -> {new_soname}")
+                needed.append(new_soname)
+        # Only a fallback now: the vision-pack build links librocal against
+        # libjpeg itself (CMakeLists.txt, #66), which makes this NEEDED redundant
+        # (and verify() rejects a librocal with unversioned libjpeg calls).
         if jpeg_soname and jpeg_soname not in needed:
             _run(["patchelf", "--add-needed", jpeg_soname, str(consumer)])
             print(f"  {consumer.name}: +NEEDED {jpeg_soname} (raw libjpeg API)")
@@ -300,9 +325,106 @@ def normalize_vision_lib_rpaths(root):
             print(f"  {so.name}: RPATH cleared")
 
 
+def readelf_available():
+    return shutil.which("readelf") is not None
+
+
+def version_sections(path):
+    """Parse `readelf -V`: (non-base version definition names, {needed file: [nodes]})."""
+    out = subprocess.run(
+        ["readelf", "-V", str(path)],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    definitions = []
+    needs = {}
+    section = None
+    needed_file = None
+    for line in out.splitlines():
+        if line.startswith("Version definition section"):
+            section = "def"
+        elif line.startswith("Version needs section"):
+            section = "need"
+        elif line.startswith("Version symbols section"):
+            section = None
+        elif section == "def":
+            m = re.search(r"Flags:\s*(\S+)\s+Index:\s*\d+\s+Cnt:\s*\d+\s+Name:\s*(\S+)", line)
+            if m and m.group(1) != "BASE":
+                definitions.append(m.group(2))
+        elif section == "need":
+            m = re.search(r"File:\s*(\S+)\s+Cnt:\s*\d+", line)
+            if m:
+                needed_file = m.group(1)
+                needs.setdefault(needed_file, [])
+                continue
+            m = re.search(r"Name:\s*(\S+)\s+Flags:", line)
+            if m and needed_file:
+                needs[needed_file].append(m.group(1))
+    return definitions, needs
+
+
+def verify_version_nodes(root, sysdeps_dir):
+    """Fail if the bundled libs or their consumers still use stock version nodes (#66).
+
+    Producers: every bundled versioned lib defines exactly PRIVATE_VERSION_NODE.
+    Consumers: every version need on a bundled lib names it, and librocal.so has
+    one for each bundled versioned lib. A missing need means librocal calls that
+    lib without a symbol version, so any copy loaded earlier in the process would
+    satisfy the call (this is what bit libjpeg, which rocAL did not link).
+    """
+    ok = True
+    present = []
+    for stem in VERSIONED_STEMS:
+        libs = sorted(
+            p for p in sysdeps_dir.glob(f"lib{stem}{SUFFIX}.so*")
+            if p.is_file() and not p.is_symlink()
+        )
+        if not libs:
+            continue
+        present.append(stem)
+        for lib in libs:
+            definitions, _ = version_sections(lib)
+            if definitions != [PRIVATE_VERSION_NODE]:
+                print(f"ERROR: {lib.name} defines version nodes {definitions or 'none'}, "
+                      f"expected only [{PRIVATE_VERSION_NODE}] (#66): a host copy defining "
+                      "the same node can satisfy librocal's calls")
+                ok = False
+
+    def bundled_prefix(file_name):
+        for stem in present:
+            if file_name.startswith(f"lib{stem}{SUFFIX}.so"):
+                return stem
+        return None
+
+    for pattern in CONSUMER_GLOBS:
+        for consumer in sorted(root.glob(pattern)):
+            if consumer.is_symlink() or not consumer.is_file():
+                continue
+            _, needs = version_sections(consumer)
+            for needed_file, nodes in needs.items():
+                if bundled_prefix(needed_file) is None:
+                    continue
+                stock = [n for n in nodes if n != PRIVATE_VERSION_NODE]
+                if stock:
+                    print(f"ERROR: {consumer.name} requires version nodes {stock} from "
+                          f"{needed_file}, expected only [{PRIVATE_VERSION_NODE}] (#66)")
+                    ok = False
+            if consumer.name.startswith("librocal.so"):
+                referenced = {bundled_prefix(f) for f in needs}
+                for stem in present:
+                    if stem not in referenced:
+                        print(f"ERROR: {consumer.name} has no versioned reference to the "
+                              f"bundled lib{stem}{SUFFIX}; its calls into it carry no symbol "
+                              "version and bind to any copy loaded first (#66)")
+                        ok = False
+    return ok
+
+
 def verify(root, sysdeps_dir):
     """Fail on a stock bundled SONAME, or an RPATH that won't survive shipping."""
     ok = True
+
+    if not verify_version_nodes(root, sysdeps_dir):
+        ok = False
 
     stock_sonames = set()
     for pattern in CONSUMER_GLOBS:
@@ -367,6 +489,10 @@ def main():
         return 1
     if not patchelf_available():
         print("ERROR: patchelf not found on PATH", file=sys.stderr)
+        return 1
+    if not readelf_available():
+        print("ERROR: readelf (binutils) not found on PATH; it is needed to verify "
+              "the bundled libs' symbol-version nodes", file=sys.stderr)
         return 1
 
     print(f"[rewrite_sonames] rewriting bundled sysdeps in {sysdeps_dir}")
