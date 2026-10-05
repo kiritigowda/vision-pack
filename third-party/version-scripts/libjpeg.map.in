@@ -1,0 +1,13 @@
+# Private symbol-version script for the bundled libjpeg (#66).
+#
+# Replaces libjpeg-turbo's own libjpeg.map (node LIBJPEG_<ver>) so that
+# librocal's references carry a version node that no host libjpeg defines. The
+# local: list mirrors upstream's libjpeg.map.in, so the exported symbol set is
+# unchanged; only the node name differs.
+@VP_PRIVATE_VERSION_NODE@ {
+  global:
+    *;
+  local:
+    jsimd_*;
+    jconst_*;
+};

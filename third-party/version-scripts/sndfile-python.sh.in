@@ -1,0 +1,33 @@
+#!/bin/sh
+# Python launcher handed to libsndfile as PYTHON_EXECUTABLE (#66).
+#
+# libsndfile generates its linker version script by running
+# src/create_symbols_file.py, and always names the version node
+# "libsndfile.so.<abi>". A host libsndfile defines the same node, so a versioned
+# reference from librocal can bind to the host copy. Adding a second version
+# script does not help: the linker keeps both nodes. This wrapper runs the real
+# interpreter unchanged for every other use, and for create_symbols_file.py it
+# renames that node to the private one.
+REAL="@VP_SNDFILE_REAL_PYTHON@"
+NODE="@VP_PRIVATE_VERSION_NODE@"
+
+case "$1" in
+  *create_symbols_file.py)
+    tmp=$(mktemp) || exit 1
+    "$REAL" "$@" > "$tmp" || { rm -f "$tmp"; exit 1; }
+    sed -E "s/^libsndfile\\.so\\.[0-9.]+\$/$NODE/" "$tmp" > "$tmp.out"
+    rc=$?
+    rm -f "$tmp"
+    if [ "$rc" -ne 0 ] || ! grep -qx "$NODE" "$tmp.out"; then
+      echo "sndfile-python: expected a 'libsndfile.so.<abi>' version node in the" \
+           "generated symbols file; libsndfile's format changed (#66)" >&2
+      rm -f "$tmp.out"
+      exit 1
+    fi
+    cat "$tmp.out"
+    rm -f "$tmp.out"
+    ;;
+  *)
+    exec "$REAL" "$@"
+    ;;
+esac

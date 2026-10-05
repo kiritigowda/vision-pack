@@ -205,7 +205,16 @@ if(VISION_PACK_ENABLE_ROCAL)
 
   if(VISION_PACK_BUNDLE_TURBOJPEG)
     list(APPEND _rocal_extra_deps turbojpeg_external)
-    list(APPEND _rocal_cmake_args "-DTURBO_JPEG_PATH=${_bstage}")
+    # rocAL's FindTurboJpeg links only libturbojpeg, but its decoders also call
+    # the raw libjpeg API (libjpeg_extra.cpp). Left unresolved at link time,
+    # those calls carry no symbol version and bind to any libjpeg in the process
+    # first, e.g. the host's (#66). Name libjpeg here as well so the linker
+    # resolves them against the bundled copy and records its private version
+    # node. find_library inside FindTurboJpeg is skipped once this is set. The
+    # "|" becomes ";" through LIST_SEPARATOR (vision_pack_subproject.cmake).
+    list(APPEND _rocal_cmake_args
+      "-DTURBO_JPEG_PATH=${_bstage}"
+      "-DTurboJpeg_LIBRARIES=${_bstage}/lib/libturbojpeg.so|${_bstage}/lib/libjpeg.so")
   endif()
 
   if(VISION_PACK_BUNDLE_PROTOBUF)
