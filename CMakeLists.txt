@@ -294,3 +294,26 @@ install(FILES
   DESTINATION lib/cmake
   COMPONENT runtime
 )
+
+# Vendored-dependency licenses for rocCV and rocPyDecode. Unlike rocAL (which
+# uses vision-pack's bundled third-party/), these submodules vendor their own
+# pybind11/dlpack and compile them into their Python bindings (rocpycv,
+# rocpydecode, rocpyjpegdecode), so each package must ship those licenses.
+# rocPyDecode also ships no license of its own otherwise. The package job
+# checks out no submodules, so stage from source here (COMPONENT runtime),
+# and packaging/ ships each in the matching package. See third-party/ for the
+# rocAL/sysdeps deps handled the same way.
+if(VISION_PACK_ENABLE_ROCCV)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/roccv/third_party/pybind11/LICENSE"
+    DESTINATION share/doc/amdrocm-roccv/licenses/pybind11 COMPONENT runtime)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/roccv/third_party/dlpack/LICENSE"
+    DESTINATION share/doc/amdrocm-roccv/licenses/dlpack COMPONENT runtime)
+endif()
+if(VISION_PACK_ENABLE_ROCPYDECODE)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rocpydecode/LICENSE.txt"
+    DESTINATION share/doc/amdrocm-pydecode COMPONENT runtime)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rocpydecode/videoDecode/third_party/pybind11/LICENSE"
+    DESTINATION share/doc/amdrocm-pydecode/licenses/pybind11 COMPONENT runtime)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rocpydecode/videoDecode/third_party/dlpack/LICENSE"
+    DESTINATION share/doc/amdrocm-pydecode/licenses/dlpack COMPONENT runtime)
+endif()

@@ -205,6 +205,25 @@ jobs:
               || { echo "  ERROR: ${LABEL} not found in SDK tarball"; exit 1; }
           done
 
+      - name: Validate ROCm SDK date matches nightly date
+        if: inputs.release_type == 'nightly' && inputs.rocm_sdk_url == '' && inputs.rocm_sdk_date != ''
+        env:
+          SDK_DATE: ${{ inputs.rocm_sdk_date }}
+          SDK_FAMILY: ${{ inputs.rocm_sdk_family || env.ROCM_SDK_FAMILY_DEFAULT }}
+        run: |
+          set -euo pipefail
+          echo "Expected nightly SDK date: ${SDK_DATE}"
+          SELECTED_URL=$(python3 build_tools/fetch_rocm_sdk.py --gpu-family "${SDK_FAMILY}" --date "${SDK_DATE}" --print-url | tail -1)
+          SELECTED_NAME="${SELECTED_URL##*/}"
+          SELECTED_DATE=$(echo "${SELECTED_NAME}" | grep -oE '[0-9]{8}' || true)
+          echo "Selected SDK tarball: ${SELECTED_NAME}"
+          if [ "${SELECTED_DATE}" != "${SDK_DATE}" ]; then
+            echo "::error::TheRock SDK date (${SELECTED_DATE}) does not match requested nightly date (${SDK_DATE})."
+            echo "This usually means TheRock has not published a nightly for the requested date yet."
+            exit 1
+          fi
+          echo "ROCm SDK date matches nightly date: ${SELECTED_DATE}"
+
       - name: CMake configure
         run: |
           # Single prefix — the dcgpu-tests SDK tarball carries HIP, compiler,

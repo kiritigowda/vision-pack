@@ -110,6 +110,13 @@ else()
   find_package(RapidJSON REQUIRED)
 endif()
 
+# These libraries parse untrusted JPEG, audio, LMDB, and protobuf input.
+# The image compiler does not enable hardening by default, so pass it explicitly.
+# _FORTIFY_SOURCE requires optimization; Release builds already supply -O2/-O3.
+set(_vp_harden_flags "-fstack-protector-strong -D_FORTIFY_SOURCE=2")
+string(STRIP "${CMAKE_C_FLAGS} ${_vp_harden_flags}" _vp_harden_c_flags)
+string(STRIP "${CMAKE_CXX_FLAGS} ${_vp_harden_flags}" _vp_harden_cxx_flags)
+
 # ---------------------------------------------------------------------------
 # protobuf v3.21.12  → lib/rocm_sysdeps/lib/libprotobuf.so
 # v3.22+ requires abseil-cpp nested submodule; v3.21.12 satisfies rocAL >=3.12.4
@@ -130,7 +137,9 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
   foreach(_t libprotobuf libprotobuf-lite libprotoc protoc)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE
-        -Wno-stringop-overread -Wno-error=stringop-overread)
+        -Wno-stringop-overread -Wno-error=stringop-overread
+        -fstack-protector-strong)
+      target_compile_definitions(${_t} PRIVATE _FORTIFY_SOURCE=2)
       # The install(CODE) glob below copies these .so's out of the build tree,
       # and file(INSTALL) performs no RPATH fixup, so the build-tree RPATH is
       # what ships. Apply the install RPATH at build time instead (#45).
@@ -182,6 +191,8 @@ if(VISION_PACK_BUNDLE_TURBOJPEG)
       -DENABLE_STATIC=OFF
       -DWITH_TURBOJPEG=ON
       -DWITH_SIMD=ON
+      "-DCMAKE_C_FLAGS:STRING=${_vp_harden_c_flags}"
+      "-DCMAKE_CXX_FLAGS:STRING=${_vp_harden_cxx_flags}"
     BUILD_BYPRODUCTS
       "${_tj_stage}/lib/libturbojpeg.so"
       "${_tj_stage}/lib/libjpeg.so"
@@ -201,9 +212,28 @@ elseif(VISION_PACK_ENABLE_ROCAL)
 endif()
 
 # ---------------------------------------------------------------------------
-# LMDB 1.0.1  → lib/rocm_sysdeps/lib/liblmdb.so
+# LMDB 0.9.31  → lib/rocm_sysdeps/lib/liblmdb.so
 # LMDB has no CMakeLists; built via its Makefile.
 # Source lives in libraries/liblmdb/ inside the repo.
+#
+# Pinned to 0.9.x (Ubuntu's shipped liblmdb0 version) instead of the 1.0
+# series: LMDB 1.0 changed the on-disk format (MDB_DATA_VERSION 3 vs 1) in a
+# way upstream documents as permanently incompatible with 0.9 databases, and
+# rocAL's Caffe/Caffe2 LMDB readers only ever consume 0.9-format DBs (#58).
+#
+# The 0.9.x Makefile, unlike 1.0.x, does not embed a SONAME on liblmdb.so
+# (no LIBVER/ABIVER/VERSION_OPT), so rewrite_sonames.py would have nothing
+# to key its isolation rename on. LDFLAGS embeds one explicitly, matching
+# Ubuntu's own liblmdb.so.0.
+#
+# LDFLAGS also carries -pthread: the 0.9.x Makefile has no default LDFLAGS
+# of its own (1.0.x's does: `LDFLAGS = $(THREADS)`), and its generic tool
+# rule (`%: %.o`) links mdb_stat/mdb_copy/mdb_dump/mdb_load using only
+# $(CFLAGS)/$(LDFLAGS) -- with our CFLAGS override above dropping the
+# Makefile's own -pthread, those tools fail with "undefined reference to
+# pthread_*" on toolchains where pthread isn't merged into libc (glibc
+# < 2.34, e.g. the CI build image). liblmdb.so itself is unaffected since
+# its own recipe hardcodes -pthread directly.
 # ---------------------------------------------------------------------------
 if(VISION_PACK_BUNDLE_LMDB)
   set(_lmdb_stage "${_vp_sysdeps_stage}")
@@ -215,7 +245,8 @@ if(VISION_PACK_BUNDLE_LMDB)
     BUILD_COMMAND
       make -C "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb"
         "prefix=<INSTALL_DIR>"
-        "CFLAGS=-O2 -fPIC"
+        "CFLAGS=-O2 -fPIC ${_vp_harden_flags}"
+        "LDFLAGS=-pthread -Wl,-soname,liblmdb.so.0"
     INSTALL_COMMAND
       make -C "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb"
         "prefix=<INSTALL_DIR>"
@@ -228,7 +259,7 @@ if(VISION_PACK_BUNDLE_LMDB)
     COMPONENT runtime
     FILES_MATCHING PATTERN "liblmdb.so*"
   )
-  message(STATUS "[vision-pack] LMDB 1.0.1 → ${VP_SYSDEPS_LIBDIR}")
+  message(STATUS "[vision-pack] LMDB 0.9.31 → ${VP_SYSDEPS_LIBDIR}")
 elseif(VISION_PACK_ENABLE_ROCAL)
   find_library(LMDB_LIBRARIES NAMES lmdb)
   find_path(LMDB_INCLUDE_DIRS NAMES lmdb.h)
@@ -260,6 +291,8 @@ if(VISION_PACK_BUNDLE_LIBSNDFILE)
       # libsndfile 1.2.2 declares cmake_minimum_required(VERSION 3.1)
       # which CMake >= 3.30 rejects. Suppress the policy error.
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      "-DCMAKE_C_FLAGS:STRING=${_vp_harden_c_flags}"
+      "-DCMAKE_CXX_FLAGS:STRING=${_vp_harden_cxx_flags}"
     BUILD_BYPRODUCTS "${_sndfile_stage}/lib/libsndfile.so"
   )
   set(SndFile_ROOT "${_sndfile_stage}" CACHE PATH "Root of bundled libsndfile" FORCE)
@@ -278,3 +311,51 @@ endif()
 # Expose staging prefix for top-level CMakeLists → rocAL cmake args
 set(VP_BUNDLED_DEPS_STAGE "${_vp_sysdeps_stage}"
     CACHE PATH "Staging prefix for bundled runtime deps" FORCE)
+
+# ---------------------------------------------------------------------------
+# Bundled-dependency licenses. Every third-party project we build ships its
+# code in an artifact, so its license must ship too. The package job checks out
+# no submodules, so the license files (which live in the submodule source) are
+# not available at CPack time — stage them into the artifact HERE, as part of
+# the `runtime` component, then packaging/ ships each one in the package that
+# carries that dep's code:
+#   compiled runtime .so's (protobuf/turbojpeg/lmdb/libsndfile) → amdrocm-vision-sysdeps
+#   header-only, compiled into rocAL (pybind11/dlpack/rapidjson) → amdrocm-rocal
+# Each install is guarded by the same BUNDLE flag as its build above, so a
+# distro build linking system copies ships no bundled license it didn't build.
+set(_vp_sysdeps_licdir "share/doc/amdrocm-vision-sysdeps/licenses")
+set(_vp_rocal_licdir   "share/doc/amdrocm-rocal/licenses")
+if(VISION_PACK_BUNDLE_PROTOBUF)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/protobuf/LICENSE"
+    DESTINATION "${_vp_sysdeps_licdir}/protobuf" COMPONENT runtime)
+endif()
+if(VISION_PACK_BUNDLE_TURBOJPEG)
+  # LICENSE.md defers the IJG license *text* to README.ijg, so both are needed.
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/LICENSE.md"
+      "${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/README.ijg"
+    DESTINATION "${_vp_sysdeps_licdir}/libjpeg-turbo" COMPONENT runtime)
+endif()
+if(VISION_PACK_BUNDLE_LMDB)
+  # LICENSE is the OpenLDAP Public License; COPYRIGHT carries the notice it requires.
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb/LICENSE"
+      "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb/COPYRIGHT"
+    DESTINATION "${_vp_sysdeps_licdir}/lmdb" COMPONENT runtime)
+endif()
+if(VISION_PACK_BUNDLE_LIBSNDFILE)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/libsndfile/COPYING"
+    DESTINATION "${_vp_sysdeps_licdir}/libsndfile" COMPONENT runtime)
+endif()
+if(VISION_PACK_BUNDLE_PYBIND11)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/pybind11/LICENSE"
+    DESTINATION "${_vp_rocal_licdir}/pybind11" COMPONENT runtime)
+endif()
+if(VISION_PACK_BUNDLE_DLPACK)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/dlpack/LICENSE"
+    DESTINATION "${_vp_rocal_licdir}/dlpack" COMPONENT runtime)
+endif()
+if(VISION_PACK_BUNDLE_RAPIDJSON)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rapidjson/license.txt"
+    DESTINATION "${_vp_rocal_licdir}/rapidjson" COMPONENT runtime)
+endif()

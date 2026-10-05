@@ -71,7 +71,7 @@ Quartz nightly ROCm SDK (/opt/rocm)
                                                     │
   ┌─── protobuf          ──┐                        │  ├── libturbojpeg  3.2.0
   ├─── libjpeg-turbo     ──┤  parallel with above   │  ├── libprotobuf  3.21.12
-  ├─── liblmdb           ──┤  (rocAL prerequisites) │  ├── liblmdb      1.0.1
+  ├─── liblmdb           ──┤  (rocAL prerequisites) │  ├── liblmdb      0.9.31
   └─── libsndfile        ──┘                        │  └── libsndfile   1.2.2
          │
        rocal    (waits for: mivisionx stage
@@ -117,7 +117,7 @@ vision-pack/
     ├── rapidjson/      master    build-time only (compiled into librocal.so)
     ├── protobuf/       v3.21.12  runtime — ships in lib/rocm_sysdeps/lib/
     ├── libjpeg-turbo/  3.2.0     runtime — ships in lib/rocm_sysdeps/lib/
-    ├── lmdb/           1.0.1     runtime — ships in lib/rocm_sysdeps/lib/
+    ├── lmdb/           0.9.31    runtime — ships in lib/rocm_sysdeps/lib/
     └── libsndfile/     1.2.2     runtime — ships in lib/rocm_sysdeps/lib/
 ```
 
@@ -396,7 +396,7 @@ are real failures.
 | rapidjson | master | MIT | — (build-time) | compiled into librocal.so; v1.1.0 missing API needed by rocAL |
 | protobuf | v3.21.12 | BSD-3 | `lib/rocm_sysdeps/lib/` | v3.22+ requires abseil nested submodule; `protobuf-lite` is also shipped |
 | libjpeg-turbo | 3.2.0 | BSD/IJG | `lib/rocm_sysdeps/lib/` | rocAL links libturbojpeg.so dynamically; also ships the isolated libjpeg for rocAL's raw libjpeg API (`jpeg_std_error`) |
-| lmdb | 1.0.1 | OpenLDAP | `lib/rocm_sysdeps/lib/` | rocAL Caffe/Caffe2 LMDB reader |
+| lmdb | 0.9.31 | OpenLDAP | `lib/rocm_sysdeps/lib/` | rocAL Caffe/Caffe2 LMDB reader; pinned to 0.9.x (matches Ubuntu's `liblmdb0`) since LMDB 1.0's on-disk format cannot open 0.9-format databases |
 | libsndfile | 1.2.2 | LGPL-2.1 | `lib/rocm_sysdeps/lib/` | rocAL audio augmentation; built without external codecs |
 
 **Excluded by design:** ffmpeg (libavcodec/avformat/avutil/swscale), OpenCV, and
