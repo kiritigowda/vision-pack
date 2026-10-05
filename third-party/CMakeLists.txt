@@ -110,6 +110,13 @@ else()
   find_package(RapidJSON REQUIRED)
 endif()
 
+# These libraries parse untrusted JPEG, audio, LMDB, and protobuf input.
+# The image compiler does not enable hardening by default, so pass it explicitly.
+# _FORTIFY_SOURCE requires optimization; Release builds already supply -O2/-O3.
+set(_vp_harden_flags "-fstack-protector-strong -D_FORTIFY_SOURCE=2")
+string(STRIP "${CMAKE_C_FLAGS} ${_vp_harden_flags}" _vp_harden_c_flags)
+string(STRIP "${CMAKE_CXX_FLAGS} ${_vp_harden_flags}" _vp_harden_cxx_flags)
+
 # ---------------------------------------------------------------------------
 # protobuf v3.21.12  → lib/rocm_sysdeps/lib/libprotobuf.so
 # v3.22+ requires abseil-cpp nested submodule; v3.21.12 satisfies rocAL >=3.12.4
@@ -130,7 +137,9 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
   foreach(_t libprotobuf libprotobuf-lite libprotoc protoc)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE
-        -Wno-stringop-overread -Wno-error=stringop-overread)
+        -Wno-stringop-overread -Wno-error=stringop-overread
+        -fstack-protector-strong)
+      target_compile_definitions(${_t} PRIVATE _FORTIFY_SOURCE=2)
       # The install(CODE) glob below copies these .so's out of the build tree,
       # and file(INSTALL) performs no RPATH fixup, so the build-tree RPATH is
       # what ships. Apply the install RPATH at build time instead (#45).
@@ -182,6 +191,8 @@ if(VISION_PACK_BUNDLE_TURBOJPEG)
       -DENABLE_STATIC=OFF
       -DWITH_TURBOJPEG=ON
       -DWITH_SIMD=ON
+      "-DCMAKE_C_FLAGS:STRING=${_vp_harden_c_flags}"
+      "-DCMAKE_CXX_FLAGS:STRING=${_vp_harden_cxx_flags}"
     BUILD_BYPRODUCTS
       "${_tj_stage}/lib/libturbojpeg.so"
       "${_tj_stage}/lib/libjpeg.so"
@@ -234,7 +245,7 @@ if(VISION_PACK_BUNDLE_LMDB)
     BUILD_COMMAND
       make -C "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb"
         "prefix=<INSTALL_DIR>"
-        "CFLAGS=-O2 -fPIC"
+        "CFLAGS=-O2 -fPIC ${_vp_harden_flags}"
         "LDFLAGS=-pthread -Wl,-soname,liblmdb.so.0"
     INSTALL_COMMAND
       make -C "${CMAKE_CURRENT_SOURCE_DIR}/lmdb/libraries/liblmdb"
@@ -280,6 +291,8 @@ if(VISION_PACK_BUNDLE_LIBSNDFILE)
       # libsndfile 1.2.2 declares cmake_minimum_required(VERSION 3.1)
       # which CMake >= 3.30 rejects. Suppress the policy error.
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      "-DCMAKE_C_FLAGS:STRING=${_vp_harden_c_flags}"
+      "-DCMAKE_CXX_FLAGS:STRING=${_vp_harden_cxx_flags}"
     BUILD_BYPRODUCTS "${_sndfile_stage}/lib/libsndfile.so"
   )
   set(SndFile_ROOT "${_sndfile_stage}" CACHE PATH "Root of bundled libsndfile" FORCE)

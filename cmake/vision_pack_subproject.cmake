@@ -192,6 +192,13 @@ function(vision_pack_subproject_activate)
         # flag overrides the config; CMake's $ORIGIN install RPATH stays.
         "-DCMAKE_C_FLAGS:STRING=-fno-rtlib-add-rpath"
         "-DCMAKE_CXX_FLAGS:STRING=-fno-rtlib-add-rpath"
+        # gcc-toolset's libstdc++.so is a linker script. Symbols newer than the
+        # image's GCC 8 libstdc++ come from libstdc++_nonshared.a and are
+        # exported unless excluded, so they interpose libstdc++.so.6 (#74).
+        # No-op on a normal libstdc++ that does not link that archive.
+        # SHARED covers libopenvx and libroccv; MODULE covers the pybind modules.
+        "-DCMAKE_SHARED_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a"
+        "-DCMAKE_MODULE_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a"
         ${_cmake_args}
 
       BUILD_COMMAND

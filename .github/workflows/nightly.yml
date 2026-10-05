@@ -43,12 +43,17 @@ jobs:
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
       bumped: ${{ steps.commit.outputs.bumped }}
+      nightly_date: ${{ steps.date.outputs.nightly_date }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set nightly date
+        id: date
+        run: echo "nightly_date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Bump vision library submodules to develop HEAD
         if: inputs.skip_bump != true
@@ -92,7 +97,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       ref: ${{ needs.bump-submodules.outputs.sha }}
-      rocm_sdk_date: ${{ inputs.rocm_sdk_date || '' }}
+      rocm_sdk_date: ${{ inputs.rocm_sdk_date || needs.bump-submodules.outputs.nightly_date }}
       rocm_sdk_family: ${{ inputs.rocm_sdk_family || '' }}
       rocm_sdk_url: ${{ inputs.rocm_sdk_url || '' }}
       release_type: nightly
