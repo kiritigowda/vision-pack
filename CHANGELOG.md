@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- rocAL finds the staged MIVisionX via `MIVisionX_PATH` instead of hard-coded
+  library paths (#9).
+- CI Python is keyed off a single `PYTHON_ABI` workflow env (still `cp312-cp312`)
+  (#9).
+- CI caches the compressed ROCm SDK archive by its exact resolved URL and uses
+  that same URL in the build and every test leg (#9, #23).
 ### Fixed
 - Bundled LMDB downgraded from 1.0.1 to 0.9.31 (Ubuntu's shipped version) —
   1.0.1's incompatible on-disk format (`MDB_DATA_VERSION` 3) broke rocAL's
