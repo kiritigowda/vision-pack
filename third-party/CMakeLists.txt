@@ -113,7 +113,15 @@ endif()
 # These libraries parse untrusted JPEG, audio, LMDB, and protobuf input.
 # The image compiler does not enable hardening by default, so pass it explicitly.
 # _FORTIFY_SOURCE requires optimization; Release builds already supply -O2/-O3.
-set(_vp_harden_flags "-fstack-protector-strong -D_FORTIFY_SOURCE=2")
+#
+# -ffile-prefix-map also rides along here: without it every __FILE__ in these
+# sources bakes this checkout's absolute build path into .rodata, which then
+# surfaces in error messages (#73). Flows into libjpeg-turbo/libsndfile via
+# their CMAKE_C_FLAGS/CMAKE_CXX_FLAGS CMAKE_ARGS below and into LMDB's
+# Makefile CFLAGS; protobuf (add_subdirectory, not CMAKE_ARGS) needs the same
+# flag added to its own target_compile_options loop below instead.
+set(_vp_harden_flags
+  "-fstack-protector-strong -D_FORTIFY_SOURCE=2 -ffile-prefix-map=${CMAKE_SOURCE_DIR}=vision-pack")
 string(STRIP "${CMAKE_C_FLAGS} ${_vp_harden_flags}" _vp_harden_c_flags)
 string(STRIP "${CMAKE_CXX_FLAGS} ${_vp_harden_flags}" _vp_harden_cxx_flags)
 
@@ -138,7 +146,8 @@ if(VISION_PACK_BUNDLE_PROTOBUF)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE
         -Wno-stringop-overread -Wno-error=stringop-overread
-        -fstack-protector-strong)
+        -fstack-protector-strong
+        "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=vision-pack")
       target_compile_definitions(${_t} PRIVATE _FORTIFY_SOURCE=2)
       # The install(CODE) glob below copies these .so's out of the build tree,
       # and file(INSTALL) performs no RPATH fixup, so the build-tree RPATH is
