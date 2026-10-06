@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `include/` on `rocal::rocal`, so both the unprefixed `#include
   "rocal_api.h"` form rocAL's own sources/tests use and the namespaced
   `#include <rocal/rocal_api.h>` form compile (#78).
+- `amdrocm-pydecode-test` now ships the rocPyDecode samples its regression
+  tests run (`share/rocpydecode/samples`, `share/rocpyjpegdecode/samples`).
+  No DEB or RPM carried them, so on a package install both tests started
+  Python on a missing file and exited 2. `validate_packages.sh` now checks for
+  the two sample scripts (#70).
 
 ### Added
 - Bundled third-party dependencies now ship their license files, each in the
