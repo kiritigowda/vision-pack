@@ -165,8 +165,37 @@ function(vision_pack_install_matched component destination)
   )
 endfunction()
 
+# install(FILES)/install(DIRECTORY ... FILES_MATCHING) both default shared
+# libraries to mode 0644 regardless of their actual mode in the staging tree
+# (where each subproject's own install(TARGETS) already got this right, 0755).
+# DEB and RPM package from this one re-installed tree, and 0644 is correct for
+# DEB (Debian Policy), but rpm <= 4.16 (RHEL 8/9) only auto-generates soname
+# Provides/Requires for files with the executable bit (#76). Fix RPM only, via
+# CPACK_RPM_<COMPONENT>_USER_FILELIST — an %attr() override applied only when
+# building that one generator's spec, so DEB's install() output is untouched.
+# Globs the real staged files so the version-suffixed filenames (e.g.
+# libopenvx.so.1.3.2) never need to be written here by hand; symlinks are
+# skipped since RPM's attr targets the real ELF file and a symlink's own mode
+# is always lrwxrwxrwx regardless.
+function(vision_pack_rpm_attr_0755 component)
+  file(GLOB _real_sos LIST_DIRECTORIES false ${ARGN})
+  set(_entries "")
+  foreach(_so ${_real_sos})
+    if(NOT IS_SYMLINK "${_so}")
+      file(RELATIVE_PATH _rel "${VISION_PACK_STAGING_DIR}" "${_so}")
+      list(APPEND _entries "%attr(0755,root,root) ${CPACK_PACKAGING_INSTALL_PREFIX}/${_rel}")
+    endif()
+  endforeach()
+  set(CPACK_RPM_${component}_USER_FILELIST "${_entries}" PARENT_SCOPE)
+endfunction()
+
 # --- MIVisionX runtime: lib/*.so + bin/runvx ---
 vision_pack_install_matched(mivisionx lib
+  "${VISION_PACK_STAGING_DIR}/lib/libopenvx.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/libvxu.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/libvx_rpp.so*"
+)
+vision_pack_rpm_attr_0755(MIVISIONX
   "${VISION_PACK_STAGING_DIR}/lib/libopenvx.so*"
   "${VISION_PACK_STAGING_DIR}/lib/libvxu.so*"
   "${VISION_PACK_STAGING_DIR}/lib/libvx_rpp.so*"
@@ -204,6 +233,10 @@ vision_pack_install_matched(rocal lib
   "${VISION_PACK_STAGING_DIR}/lib/librocal.so*"
   "${VISION_PACK_STAGING_DIR}/lib/rocal_pybind*.so"
 )
+vision_pack_rpm_attr_0755(ROCAL
+  "${VISION_PACK_STAGING_DIR}/lib/librocal.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocal_pybind*.so"
+)
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/amd"
     DESTINATION lib COMPONENT rocal OPTIONAL
 )
@@ -234,6 +267,10 @@ vision_pack_install_matched(roccv lib
   "${VISION_PACK_STAGING_DIR}/lib/libroccv.so*"
   "${VISION_PACK_STAGING_DIR}/lib/rocpycv*.so"
   "${VISION_PACK_STAGING_DIR}/lib/rocpycv.pyi"
+)
+vision_pack_rpm_attr_0755(ROCCV
+  "${VISION_PACK_STAGING_DIR}/lib/libroccv.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocpycv*.so"
 )
 install(FILES "${VISION_PACK_STAGING_DIR}/share/doc/roccv/LICENSE.txt"
     DESTINATION "share/doc/${VP_PKG_ROCCV}" COMPONENT roccv OPTIONAL
@@ -268,6 +305,10 @@ vision_pack_install_matched(rocpydecode lib
   "${VISION_PACK_STAGING_DIR}/lib/rocpydecode*.so"
   "${VISION_PACK_STAGING_DIR}/lib/rocpyjpegdecode*.so"
 )
+vision_pack_rpm_attr_0755(ROCPYDECODE
+  "${VISION_PACK_STAGING_DIR}/lib/rocpydecode*.so"
+  "${VISION_PACK_STAGING_DIR}/lib/rocpyjpegdecode*.so"
+)
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/lib/pyRocVideoDecode"
     DESTINATION lib COMPONENT rocpydecode
 )
@@ -296,6 +337,14 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpyjpegdecode/tests"
 # side-by-side isolation from host copies (build_tools/rewrite_sonames.py, #4),
 # so the patterns match the renamed files, not the stock upstream names.
 vision_pack_install_matched(rocm-sysdeps-vision lib/rocm_sysdeps/lib
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libturbojpeg-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libjpeg-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libprotobuf-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libprotobuf-lite-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/liblmdb-rocm-vision.so*"
+  "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libsndfile-rocm-vision.so*"
+)
+vision_pack_rpm_attr_0755(ROCM-SYSDEPS-VISION
   "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libturbojpeg-rocm-vision.so*"
   "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libjpeg-rocm-vision.so*"
   "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/libprotobuf-rocm-vision.so*"
