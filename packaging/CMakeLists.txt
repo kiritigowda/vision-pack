@@ -262,7 +262,8 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/roccv/test"
 # rocPyDecode's upstream install rules carry no CMake COMPONENT tags
 # (rocPyDecode#285), so we can't rely on component-filtered installs. Instead we
 # split by PATH here at the packaging layer: runtime .so's → rocpydecode, and
-# share/rocpydecode/tests → rocpydecode-test (below). No submodule patch needed.
+# share/rocpydecode/{tests,samples} → rocpydecode-test (below). No submodule
+# patch needed.
 # The pyRoc* trees are this component's own packages, so they install whole.
 vision_pack_install_matched(rocpydecode lib
   "${VISION_PACK_STAGING_DIR}/lib/rocpydecode*.so"
@@ -287,6 +288,16 @@ install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpydecode/tests"
     DESTINATION share/rocpydecode COMPONENT rocpydecode-test OPTIONAL
 )
 install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpyjpegdecode/tests"
+    DESTINATION share/rocpyjpegdecode COMPONENT rocpydecode-test OPTIONAL
+)
+# The regression tests run a sample located relative to their own directory
+# (tests/../samples/...), so the samples must ship alongside them or every
+# test exits 2 on a package install (#70). validate_packages.sh checks for the
+# two files the tests run, since OPTIONAL would otherwise hide a missing tree.
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpydecode/samples"
+    DESTINATION share/rocpydecode COMPONENT rocpydecode-test OPTIONAL
+)
+install(DIRECTORY "${VISION_PACK_STAGING_DIR}/share/rocpyjpegdecode/samples"
     DESTINATION share/rocpyjpegdecode COMPONENT rocpydecode-test OPTIONAL
 )
 
