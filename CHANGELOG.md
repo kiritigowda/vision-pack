@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   past `PATH_SUFFIXES`, so `MIVisionX_INCLUDE_DIRS` resolves to
   `include/mivisionx` instead of `include/`, and consumers of
   `MIVisionX::MIVisionX` can compile `#include <VX/vx.h>` (#63).
+- `Findrocal.cmake` now exports both `include/rocal` and the parent
+  `include/` on `rocal::rocal`, so both the unprefixed `#include
+  "rocal_api.h"` form rocAL's own sources/tests use and the namespaced
+  `#include <rocal/rocal_api.h>` form compile (#78).
 
 ### Added
 - Bundled third-party dependencies now ship their license files, each in the
