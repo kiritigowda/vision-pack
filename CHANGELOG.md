@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `include/` on `rocal::rocal`, so both the unprefixed `#include
   "rocal_api.h"` form rocAL's own sources/tests use and the namespaced
   `#include <rocal/rocal_api.h>` form compile (#78).
+- Shipped binaries no longer embed build-machine source paths. `-ffile-prefix-map`
+  on every subproject and bundled dep remaps `__FILE__` so error messages (rocAL's
+  LMDB errors, runvx's `ERROR_CHECK`) name files relative to the project instead
+  of e.g. `/__w/vision-pack/vision-pack/...`; `rewrite_sonames.py` now also strips
+  the NASM-embedded source-file symbol-table entries from the bundled libjpeg and
+  libturbojpeg, which never load at runtime but showed up in a binary scan (#73).
 
 ### Added
 - Bundled third-party dependencies now ship their license files, each in the
