@@ -34,7 +34,7 @@ expected_contents() {
     amdrocm-pydecode)           echo 'lib/rocpydecode.*\.so lib/rocpyjpegdecode.*\.so lib/pyRocVideoDecode/ lib/pyRocJpegDecode/' ;;
     amdrocm-pydecode-test)      echo 'share/rocpydecode/tests/ share/rocpyjpegdecode/tests/' ;;
     amdrocm-vision-sysdeps)     echo 'libturbojpeg-rocm-vision\.so libjpeg-rocm-vision\.so libprotobuf-rocm-vision\.so liblmdb-rocm-vision\.so libsndfile-rocm-vision\.so' ;;
-    amdrocm-vision-pythonpath)  echo 'dist-packages/amdrocm-vision\.pth' ;;
+    amdrocm-vision-pythonpath)  echo 'dist-packages/amdrocm-vision.*\.pth' ;;
     *)                          echo '' ;;
   esac
 }
@@ -67,12 +67,33 @@ declares_no_deps_ok() {
   case "$1" in amdrocm-vision-sysdeps|amdrocm-vision-pythonpath) return 0 ;; *) return 1 ;; esac
 }
 
+# Strip the ROCm <major>.<minor> suffix. For example, amdrocm-mivisionx10.2
+# becomes amdrocm-mivisionx. The suffix has no hyphen, matching
+# amdrocm-runtime<major>.<minor>.
+pkg_base() {
+  printf '%s\n' "$1" | sed -E 's/[0-9]+\.[0-9]+$//'
+}
+
+# ROCm packages this component must depend on, as short names. The check
+# appends the release taken from the package's own name.
+expected_rocm_depends() {
+  case "$1" in
+    amdrocm-mivisionx) echo 'rpp runtime' ;;
+    amdrocm-rocal)     echo 'decode jpeg hipfile' ;;
+    amdrocm-roccv)     echo 'runtime' ;;
+    amdrocm-pydecode)  echo 'decode jpeg' ;;
+    *)                 echo '' ;;
+  esac
+}
+
 check_package() {
   local deb="$1" fail=0
   local pkg ver arch maint desc deps contents paths files links
 
-  pkg="$(dpkg-deb --field "$deb" Package 2>/dev/null || echo '')"
-  [ -n "$pkg" ] || { echo "  ERROR: cannot read control data"; return 1; }
+  pkg_full="$(dpkg-deb --field "$deb" Package 2>/dev/null || echo '')"
+  [ -n "$pkg_full" ] || { echo "  ERROR: cannot read control data"; return 1; }
+  pkg="$(pkg_base "$pkg_full")"
+  rel="${pkg_full#"$pkg"}"
   ver="$(dpkg-deb --field "$deb" Version)"
   arch="$(dpkg-deb --field "$deb" Architecture)"
   maint="$(dpkg-deb --field "$deb" Maintainer)"
@@ -80,7 +101,7 @@ check_package() {
   deps="$(dpkg-deb --field "$deb" Depends)"
 
   echo "------------------------------------------------------------------"
-  echo "### ${pkg}  (${deb##*/})"
+  echo "### ${pkg_full}  (${deb##*/})"
   echo "--- control metadata (dpkg -I) ---"
   dpkg-deb --info "$deb" | sed -n '/^ Package:/,$p' | sed 's/^/  /'
 
@@ -106,7 +127,35 @@ check_package() {
     *) echo "  ERROR: version '${ver}' does not start with a digit"; fail=1 ;;
   esac
   if [ -z "$deps" ] && ! declares_no_deps_ok "$pkg"; then
-    echo "  ERROR: ${pkg} declares no dependencies"; fail=1
+    echo "  ERROR: ${pkg_full} declares no dependencies"; fail=1
+  fi
+  if [ -z "$rel" ]; then
+    echo "  ERROR: ${pkg_full} has no ROCm major.minor suffix (for example amdrocm-mivisionx10.2)"; fail=1
+  fi
+  # Unversioned ROCm names (amdrocm-rpp, hip-runtime-amd) are not what a
+  # side-by-side SDK installs. A nightly <major>.<minor>.<patch>~DATE, for
+  # example 10.2.0~DATE, does not satisfy >= <major>.<minor>.<patch>.
+  if [ -n "$deps" ] && printf '%s\n' "$deps" | grep -qE \
+      '(^|[, ])(hip-runtime-amd|amdrocm-(rpp|runtime|decode|jpeg|hipfile))( |,|\(|$)'; then
+    echo "  ERROR: ${pkg_full} depends on an unversioned ROCm package name"
+    echo "         ${deps}"; fail=1
+  fi
+  if [ -n "$deps" ] && printf '%s\n' "$deps" | grep -qE \
+      '(^|[, ])amdrocm-(mivisionx|rocal|roccv|pydecode|vision)(-[a-z]+)?( |,|\(|$)'; then
+    echo "  ERROR: ${pkg_full} depends on an unversioned vision-pack package"
+    echo "         ${deps}"; fail=1
+  fi
+  if [ -n "$rel" ]; then
+    local rocm_dep
+    for rocm_dep in $(expected_rocm_depends "$pkg"); do
+      if printf '%s\n' "$deps" | grep -qE \
+          "amdrocm-${rocm_dep}${rel} \\(>= [^)]*~\\)"; then
+        echo "  depends on amdrocm-${rocm_dep}${rel} with a nightly-safe bound: OK"
+      else
+        echo "  ERROR: ${pkg_full} must depend on amdrocm-${rocm_dep}${rel} (>= …~)"
+        echo "         ${deps}"; fail=1
+      fi
+    done
   fi
 
   # --- meta-packages ---------------------------------------------------------
@@ -123,19 +172,19 @@ check_package() {
     for want_dep in $(expected_meta_depends "$pkg"); do
       # Match on a word boundary so amdrocm-vision does not satisfy a check
       # for amdrocm-vision-sdk.
-      if echo "$deps" | grep -qE "(^|[, ])${want_dep}( |,|\(|$)"; then
-        echo "  pulls in ${want_dep}: OK"
+      if echo "$deps" | grep -qE "(^|[, ])${want_dep}${rel}( |,|\\(|$)"; then
+        echo "  pulls in ${want_dep}${rel}: OK"
       else
-        echo "  ERROR: ${pkg} does not depend on ${want_dep}"; fail=1
+        echo "  ERROR: ${pkg_full} does not depend on ${want_dep}${rel}"; fail=1
       fi
     done
     if [ "$fail" -eq 0 ]; then
-      echo "  => ${pkg}: PASS"
-      SUMMARY="${SUMMARY}  PASS  ${pkg} (meta, $(echo "$deps" | tr ',' '\n' | grep -c .) deps)\n"
+      echo "  => ${pkg_full}: PASS"
+      SUMMARY="${SUMMARY}  PASS  ${pkg_full} (meta, $(echo "$deps" | tr ',' '\n' | grep -c .) deps)\n"
     else
-      echo "  => ${pkg}: FAIL"
-      SUMMARY="${SUMMARY}  FAIL  ${pkg} (meta)\n"
-      FAILED="${FAILED} ${pkg}"
+      echo "  => ${pkg_full}: FAIL"
+      SUMMARY="${SUMMARY}  FAIL  ${pkg_full} (meta)\n"
+      FAILED="${FAILED} ${pkg_full}"
     fi
     return "$fail"
   fi
@@ -181,7 +230,7 @@ check_package() {
                  "libsndfile-rocm-vision:libsndfile"; do
         so="${dep%%:*}"; lic="${dep##*:}"
         echo "$paths" | grep -qE "${so}\.so" || continue
-        if echo "$paths" | grep -qE "share/doc/amdrocm-vision-sysdeps/licenses/${lic}/"; then
+        if echo "$paths" | grep -qE "share/doc/amdrocm-vision-sysdeps${rel}/licenses/${lic}/"; then
           echo "  license for ${lic}: OK"
         else
           echo "  ERROR: ${pkg} ships ${so} but no license for ${lic}"; fail=1
@@ -194,7 +243,7 @@ check_package() {
                   "lmdb/COPYRIGHT:liblmdb-rocm-vision"; do
         lic="${want%%:*}"; so="${want##*:}"
         echo "$paths" | grep -qE "${so}\.so" || continue
-        if echo "$paths" | grep -qE "share/doc/amdrocm-vision-sysdeps/licenses/${lic}"; then
+        if echo "$paths" | grep -qE "share/doc/amdrocm-vision-sysdeps${rel}/licenses/${lic}"; then
           echo "  license file ${lic}: OK"
         else
           echo "  ERROR: ${pkg} is missing required license file ${lic}"; fail=1
@@ -202,9 +251,9 @@ check_package() {
       done
       ;;
     amdrocm-rocal)
-      if echo "$paths" | grep -qE "share/doc/amdrocm-rocal/licenses/"; then
+      if echo "$paths" | grep -qE "share/doc/amdrocm-rocal${rel}/licenses/"; then
         for lic in pybind11 dlpack rapidjson; do
-          if echo "$paths" | grep -qE "share/doc/amdrocm-rocal/licenses/${lic}/"; then
+          if echo "$paths" | grep -qE "share/doc/amdrocm-rocal${rel}/licenses/${lic}/"; then
             echo "  license for ${lic}: OK"
           else
             echo "  ERROR: ${pkg} ships bundled-dep licenses but not ${lic}"; fail=1
@@ -213,9 +262,9 @@ check_package() {
       fi
       ;;
     amdrocm-roccv)
-      if echo "$paths" | grep -qE "share/doc/amdrocm-roccv/licenses/"; then
+      if echo "$paths" | grep -qE "share/doc/amdrocm-roccv${rel}/licenses/"; then
         for lic in pybind11 dlpack; do
-          if echo "$paths" | grep -qE "share/doc/amdrocm-roccv/licenses/${lic}/"; then
+          if echo "$paths" | grep -qE "share/doc/amdrocm-roccv${rel}/licenses/${lic}/"; then
             echo "  license for ${lic}: OK"
           else
             echo "  ERROR: ${pkg} ships vendored-dep licenses but not ${lic}"; fail=1
@@ -224,14 +273,14 @@ check_package() {
       fi
       ;;
     amdrocm-pydecode)
-      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/LICENSE"; then
+      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode${rel}/LICENSE"; then
         echo "  rocPyDecode LICENSE: OK"
       else
         echo "  ERROR: ${pkg} ships no LICENSE text"; fail=1
       fi
-      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/licenses/"; then
+      if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode${rel}/licenses/"; then
         for lic in pybind11 dlpack; do
-          if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode/licenses/${lic}/"; then
+          if echo "$paths" | grep -qE "share/doc/amdrocm-pydecode${rel}/licenses/${lic}/"; then
             echo "  license for ${lic}: OK"
           else
             echo "  ERROR: ${pkg} ships vendored-dep licenses but not ${lic}"; fail=1
@@ -253,6 +302,11 @@ check_package() {
     [ -n "$d" ] || continue
     d="${d%/}"
     case "$d" in ./opt|./opt/rocm) continue ;; esac
+    # CPack records the versioned prefix even when a package ships nothing
+    # under it (the .pth lives in dist-packages).
+    if [[ "$d" =~ ^\./opt/rocm/core-[0-9]+\.[0-9]+$ ]]; then
+      continue
+    fi
     if ! printf '%s\n' "$paths" | grep -F -q -- "${d}/"; then
       empty="${empty}      ${d}"$'\n'
     fi
@@ -298,12 +352,12 @@ check_package() {
   fi
 
   if [ "$fail" -eq 0 ]; then
-    echo "  => ${pkg}: PASS"
-    SUMMARY="${SUMMARY}  PASS  ${pkg} (${files} files)\n"
+    echo "  => ${pkg_full}: PASS"
+    SUMMARY="${SUMMARY}  PASS  ${pkg_full} (${files} files)\n"
   else
-    echo "  => ${pkg}: FAIL"
-    SUMMARY="${SUMMARY}  FAIL  ${pkg} (${files} files)\n"
-    FAILED="${FAILED} ${pkg}"
+    echo "  => ${pkg_full}: FAIL"
+    SUMMARY="${SUMMARY}  FAIL  ${pkg_full} (${files} files)\n"
+    FAILED="${FAILED} ${pkg_full}"
   fi
   return "$fail"
 }
@@ -329,8 +383,9 @@ HAS_PYDECODE_TEST=0
 # path -> owning package; a second owner is a dpkg overwrite on co-install.
 declare -A PATH_OWNER
 for deb in $DEBS; do
-  pkg="$(dpkg-deb --field "$deb" Package 2>/dev/null || echo '')"
-  [ -n "$pkg" ] || continue
+  pkg_full="$(dpkg-deb --field "$deb" Package 2>/dev/null || echo '')"
+  [ -n "$pkg_full" ] || continue
+  pkg="$(pkg_base "$pkg_full")"
   [ "$pkg" = "amdrocm-pydecode" ] && HAS_PYDECODE=1
   [ "$pkg" = "amdrocm-pydecode-test" ] && HAS_PYDECODE_TEST=1
   is_meta "$pkg" && continue

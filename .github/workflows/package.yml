@@ -247,26 +247,32 @@ jobs:
               "$(dpkg-deb --field "${DEB}" Depends)"
           done
 
-          # amdrocm-rocal links libopenvx/libvx_rpp, so it must pull MIVisionX in.
+          # rocAL links libopenvx/libvx_rpp, so it must pull MIVisionX in.
+          # The package name carries the ROCm <major>.<minor>, for example
+          # amdrocm-rocal10.2. An exact match on amdrocm-rocal never hits, and
+          # the check used to warn and continue.
           ROCAL_DEB=""
+          ROCAL_PKG=""
           for d in *.deb; do
-            if [ "$(dpkg-deb --field "$d" Package)" = "amdrocm-rocal" ]; then
-              ROCAL_DEB="$d"
-              break
-            fi
+            [ -f "$d" ] || continue
+            pkg="$(dpkg-deb --field "$d" Package)"
+            case "$pkg" in
+              amdrocm-rocal[0-9]*) ROCAL_DEB="$d"; ROCAL_PKG="$pkg"; break ;;
+            esac
           done
           if [ -n "${ROCAL_DEB:-}" ]; then
+            rel="${ROCAL_PKG#amdrocm-rocal}"
             DEPS="$(dpkg-deb --field "${ROCAL_DEB}" Depends)"
             for REQ in amdrocm-mivisionx amdrocm-vision-sysdeps amdrocm-vision-pythonpath; do
-              if echo "${DEPS}" | grep -q "${REQ}"; then
-                echo "  amdrocm-rocal depends on ${REQ}: OK"
+              if echo "${DEPS}" | grep -qE "(^|[, ])${REQ}${rel}( |,|\\(|$)"; then
+                echo "  ${ROCAL_PKG} depends on ${REQ}${rel}: OK"
               else
-                echo "  ERROR: amdrocm-rocal is missing a dependency on ${REQ}"
+                echo "  ERROR: ${ROCAL_PKG} is missing a dependency on ${REQ}${rel}"
                 FAIL=1
               fi
             done
           else
-            echo "::warning::amdrocm-rocal .deb not found; dependency check skipped"
+            echo "ERROR: rocAL runtime .deb not found"; FAIL=1
           fi
           [ "${FAIL}" -eq 0 ] || { echo "DEB inspection failed"; exit 1; }
 
@@ -353,11 +359,20 @@ jobs:
           cp meta/*.deb . 2>/dev/null || echo "(no meta .debs produced)"
           find meta/rpms -name '*.rpm' -exec cp {} . \; 2>/dev/null \
             || echo "(no meta .rpms produced)"
-          echo "Meta packages:"; ls -1 *.deb | grep -E 'amdrocm-vision(-sdk|-tests)?_' || true
+          echo "Meta packages:"; ls -1 *.deb | grep -E '^amdrocm-vision([0-9].*|-sdk[0-9].*|-tests[0-9].*)\.deb$' || true
           if command -v equivs-build >/dev/null 2>&1; then
             MISSING=0
             for m in amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests; do
-              if ls "${m}_"*.deb >/dev/null 2>&1; then
+              # The ROCm <major>.<minor> is glued on. For example,
+              # amdrocm-vision10.2_*.deb, not amdrocm-vision_*.deb.
+              # This job runs in a container, so the shell is dash: compgen
+              # is bash-only and the check would fail after a successful build.
+              # A name with no match stays literal, and [ -e ] rejects it.
+              found=0
+              for f in "${m}"[0-9]*.deb; do
+                if [ -e "$f" ]; then found=1; break; fi
+              done
+              if [ "$found" -eq 1 ]; then
                 echo "  ${m} .deb: OK"
               else
                 echo "  ERROR: meta-package ${m} was not produced"; MISSING=1
@@ -368,7 +383,11 @@ jobs:
           if command -v rpmbuild >/dev/null 2>&1; then
             MISSING=0
             for m in amdrocm-vision amdrocm-vision-sdk amdrocm-vision-tests; do
-              if ls "${m}-"[0-9]*.rpm >/dev/null 2>&1; then
+              found=0
+              for f in "${m}"[0-9]*.rpm; do
+                if [ -e "$f" ]; then found=1; break; fi
+              done
+              if [ "$found" -eq 1 ]; then
                 echo "  ${m} .rpm: OK"
               else
                 echo "  ERROR: RPM meta-package ${m} was not produced"; MISSING=1
@@ -437,6 +456,7 @@ jobs:
           VER="${{ steps.version.outputs.version }}"
           BUILD="${{ steps.version.outputs.build_id }}"
           ROCM="${{ env.ROCM_VERSION }}"
+          REL="$(printf '%s\n' "$ROCM" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')"
           TAG="nightly-${BUILD}"
           SHA="${{ inputs.sha || github.sha }}"
 
@@ -451,20 +471,21 @@ jobs:
           **Commit**: ${SHA}
 
           ## Libraries
-          - **amdrocm-mivisionx** — MIVisionX OpenVX engine + RPP extension
-          - **amdrocm-rocal** — rocAL augmentation library + Python bindings
-          - **amdrocm-roccv** — rocCV GPU image processing + Python bindings
-          - **amdrocm-pydecode** — Python video/JPEG hardware decode
-          - **amdrocm-vision-sysdeps** — bundled runtime deps (libturbojpeg, libprotobuf, liblmdb, libsndfile)
+          - **amdrocm-mivisionx${REL}** — MIVisionX OpenVX engine + RPP extension
+          - **amdrocm-rocal${REL}** — rocAL augmentation library + Python bindings
+          - **amdrocm-roccv${REL}** — rocCV GPU image processing + Python bindings
+          - **amdrocm-pydecode${REL}** — Python video/JPEG hardware decode
+          - **amdrocm-vision-sysdeps${REL}** — bundled runtime deps (libturbojpeg, libprotobuf, liblmdb, libsndfile)
 
           ## Install (DEB)
           \`\`\`bash
           # CPack files are amdrocm-vision-<ver>-Linux-<component>.deb
-          # Package names: amdrocm-mivisionx, amdrocm-pydecode, …
-          dpkg -i amdrocm-*.deb
+          # Package names carry the ROCm <major>.<minor>, for example amdrocm-mivisionx${REL}
+          sudo apt install ./amdrocm-vision${REL}_*.deb
           \`\`\`
 
-          Requires ROCm ${ROCM} or later installed at /opt/rocm.
+          Requires the ROCm ${REL} packages (a ${ROCM}~ nightly satisfies the bound).
+          Files install under /opt/rocm/core-${REL}.
           NOTES
 
           gh release create "${TAG}" \
@@ -576,7 +597,30 @@ jobs:
             dpkg --force-depends -i "$f"
           done
           echo "=== installed vision tree ==="
-          ls -la /opt/rocm/lib/rocm_sysdeps/lib/ || true
+          # librocal.so's directory comes from the rocAL deb just installed.
+          # Its listing names the path, and dpkg -S must attribute that path to
+          # this package. Another release's copy under /opt/rocm is not used.
+          ROCAL_DEB="$(deb rocal)"
+          ROCAL_PKG="$(dpkg-deb -f "$ROCAL_DEB" Package)"
+          listed="$(dpkg-deb -c "$ROCAL_DEB" | awk '$6 ~ /\/librocal\.so$/ { print $6; exit }')"
+          if [ -z "$listed" ]; then
+            echo "ERROR: ${ROCAL_PKG} (${ROCAL_DEB}) contains no librocal.so"
+            exit 1
+          fi
+          LIBROCAL="/${listed#./}"
+          if [ ! -e "$LIBROCAL" ]; then
+            echo "ERROR: ${ROCAL_PKG} lists ${LIBROCAL} but it is not on disk"
+            exit 1
+          fi
+          OWNER="$(dpkg -S "$LIBROCAL" | awk -F: 'NR==1 { gsub(/ /, "", $1); print $1 }')"
+          if [ "$OWNER" != "$ROCAL_PKG" ]; then
+            echo "ERROR: ${LIBROCAL} is owned by ${OWNER}, not ${ROCAL_PKG}"
+            exit 1
+          fi
+          VISION_LIB="$(dirname "$LIBROCAL")"
+          echo "VISION_LIB=${VISION_LIB} (${ROCAL_PKG})"
+          echo "VISION_LIB=${VISION_LIB}" >> "$GITHUB_ENV"
+          ls -la "${VISION_LIB}/rocm_sysdeps/lib/" || true
 
       - name: Assert bundled SONAMEs are isolated
         run: |
@@ -587,7 +631,7 @@ jobs:
           # exactly what a host copy could shadow.
           echo "=== every shipped .so references only isolated SONAMEs ==="
           CHECKED=0
-          for LIB in /opt/rocm/lib/*.so*; do
+          for LIB in "${VISION_LIB}"/*.so*; do
             { [ -f "${LIB}" ] && [ ! -L "${LIB}" ]; } || continue
             CHECKED=$((CHECKED + 1))
             N="$(readelf -d "${LIB}" 2>/dev/null | grep -i NEEDED || true)"
@@ -603,11 +647,11 @@ jobs:
             fi
           done
           if [ "${CHECKED}" -eq 0 ]; then
-            echo "ERROR: no libraries found under /opt/rocm/lib to check"; exit 1
+            echo "ERROR: no libraries found under ${VISION_LIB} to check"; exit 1
           fi
           echo "  ${CHECKED} librar(ies) checked"
 
-          LIB=/opt/rocm/lib/librocal.so
+          LIB="${VISION_LIB}/librocal.so"
           if [ ! -e "$LIB" ]; then
             echo "ERROR: $LIB not installed"; exit 1
           fi
@@ -625,7 +669,7 @@ jobs:
           if ! echo "${NEEDED}" | grep -qi "libjpeg-rocm-vision"; then
             echo "ERROR: librocal.so missing isolated libjpeg NEEDED (#39)"; FAIL=1
           fi
-          JPEGLIB="$(find /opt/rocm/lib/rocm_sysdeps/lib -name 'libjpeg-rocm-vision.so*' \
+          JPEGLIB="$(find "${VISION_LIB}/rocm_sysdeps/lib" -name 'libjpeg-rocm-vision.so*' \
             -type f | head -1)"
           if [ -z "${JPEGLIB}" ]; then
             echo "ERROR: isolated libjpeg not shipped in rocm_sysdeps (#39)"; FAIL=1
@@ -666,7 +710,7 @@ jobs:
           # resolve them here (hip/rpp are absent by design), but the bundled
           # deps must still bind to rocm_sysdeps rather than the planted copies.
           echo "=== isolated deps resolve to rocm_sysdeps for every library ==="
-          for L in /opt/rocm/lib/*.so*; do
+          for L in "${VISION_LIB}"/*.so*; do
             { [ -f "${L}" ] && [ ! -L "${L}" ]; } || continue
             OUT="$(ldd "${L}" 2>/dev/null | grep -i 'rocm-vision' || true)"
             [ -n "${OUT}" ] || continue
@@ -679,7 +723,7 @@ jobs:
             echo "  $(basename "${L}"): $(echo "${OUT}" | grep -c .) isolated dep(s) from rocm_sysdeps"
           done
           echo "=== ldd librocal.so (bundled-dep lines) ==="
-          LDD="$(ldd /opt/rocm/lib/librocal.so || true)"
+          LDD="$(ldd "${VISION_LIB}/librocal.so" || true)"
           echo "${LDD}" | grep -Ei "rocm-vision|protobuf|turbojpeg|jpeg|lmdb|sndfile" || true
           # Each isolated dep must resolve to a file under rocm_sysdeps/lib, not
           # a host copy. Match the rocm_sysdeps/lib suffix rather than a literal
@@ -695,8 +739,40 @@ jobs:
         run: |
           set -eu
           unset PYTHONPATH || true
-          echo "=== .pth shipped? ==="
-          ls -l /usr/lib/python3/dist-packages/amdrocm-vision.pth
+          # The .pth path comes from the pythonpath deb just installed. A glob
+          # of dist-packages would also accept a .pth left by another release.
+          deb() { find debs -name "amdrocm-vision-*-Linux-$1.deb" | head -1; }
+          PTH_DEB="$(deb pythonpath)"
+          if [ -z "$PTH_DEB" ]; then
+            echo "ERROR: pythonpath package was not produced"; exit 1
+          fi
+          PTH_PKG="$(dpkg-deb -f "$PTH_DEB" Package)"
+          listed="$(dpkg-deb -c "$PTH_DEB" | awk '$6 ~ /\/amdrocm-vision.*\.pth$/ { print $6; exit }')"
+          if [ -z "$listed" ]; then
+            echo "ERROR: ${PTH_PKG} contains no .pth"; exit 1
+          fi
+          PTH="/${listed#./}"
+          if [ ! -f "$PTH" ]; then
+            echo "ERROR: ${PTH_PKG} lists ${PTH} but it is not on disk"; exit 1
+          fi
+          OWNER="$(dpkg -S "$PTH" | awk -F: 'NR==1 { gsub(/ /, "", $1); print $1 }')"
+          if [ "$OWNER" != "$PTH_PKG" ]; then
+            echo "ERROR: ${PTH} is owned by ${OWNER}, not ${PTH_PKG}"; exit 1
+          fi
+          if [ "$(tr -d '[:space:]' < "$PTH")" != "/opt/rocm/lib" ]; then
+            echo "ERROR: ${PTH} does not list /opt/rocm/lib"; exit 1
+          fi
+          # site.py adds a .pth line only when that directory exists. The
+          # packages install under /opt/rocm/core-<major>.<minor>, and a ROCm
+          # install points /opt/rocm/lib at that directory with alternatives.
+          # This runner has no ROCm SDK, so make that link from the installed
+          # core. Leave an existing /opt/rocm/lib alone.
+          if [ ! -e /opt/rocm/lib ]; then
+            mkdir -p /opt/rocm
+            ln -s "${VISION_LIB}" /opt/rocm/lib
+            echo "/opt/rocm/lib -> ${VISION_LIB}"
+          fi
+          echo "=== ${PTH} (${PTH_PKG}) ==="
           echo "=== /opt/rocm/lib on sys.path? ==="
           python3 - <<'PY'
           import sys
@@ -748,30 +824,54 @@ jobs:
           for comp in rocm-sysdeps-vision mivisionx mivisionx-dev rocal rocal-dev \
                       roccv roccv-dev; do
             f="$(deb "$comp")"
-            [ -n "$f" ] && sudo dpkg --force-depends -i "$f" || echo "(skip $comp)"
+            if [ -z "$f" ]; then
+              echo "ERROR: ${comp} package was not produced"; exit 1
+            fi
+            sudo dpkg --force-depends -i "$f"
           done
           echo "=== installed cmake shims ==="
-          ls -la /opt/rocm/lib/cmake/Find*.cmake
+          find /opt/rocm -name 'Find*.cmake' -print
           echo "=== installed package configs ==="
-          find /opt/rocm/lib/cmake -name '*Config.cmake' | sed 's/^/  /'
+          find /opt/rocm -name '*Config.cmake' | sed 's/^/  /'
 
       - name: Configure a downstream project against the shims
         run: |
           set -eu
           WORK="$(mktemp -d)"
-          cat > "${WORK}/CMakeLists.txt" <<'CMAKE'
+          # The shim directory comes from the MIVisionX devel deb just
+          # installed, not from the first FindMIVisionX.cmake under /opt/rocm.
+          deb() { find debs -name "amdrocm-vision-*-Linux-$1.deb" | head -1; }
+          MVX_DEV="$(deb mivisionx-dev)"
+          if [ -z "$MVX_DEV" ]; then
+            echo "ERROR: mivisionx-dev package was not produced"; exit 1
+          fi
+          MVX_PKG="$(dpkg-deb -f "$MVX_DEV" Package)"
+          listed="$(dpkg-deb -c "$MVX_DEV" | awk '$6 ~ /\/FindMIVisionX\.cmake$/ { print $6; exit }')"
+          if [ -z "$listed" ]; then
+            echo "ERROR: ${MVX_PKG} contains no FindMIVisionX.cmake"; exit 1
+          fi
+          SHIM="/${listed#./}"
+          if [ ! -f "$SHIM" ]; then
+            echo "ERROR: ${MVX_PKG} lists ${SHIM} but it is not on disk"; exit 1
+          fi
+          OWNER="$(dpkg -S "$SHIM" | awk -F: 'NR==1 { gsub(/ /, "", $1); print $1 }')"
+          if [ "$OWNER" != "$MVX_PKG" ]; then
+            echo "ERROR: ${SHIM} is owned by ${OWNER}, not ${MVX_PKG}"; exit 1
+          fi
+          CMAKE_DIR="$(dirname "$SHIM")"
+          cat > "${WORK}/CMakeLists.txt" <<CMAKE
           cmake_minimum_required(VERSION 3.20)
           project(vp_findpackage_smoke LANGUAGES CXX)
-          list(APPEND CMAKE_MODULE_PATH "/opt/rocm/lib/cmake")
+          list(APPEND CMAKE_MODULE_PATH "${CMAKE_DIR}")
           find_package(MIVisionX REQUIRED)
           find_package(rocal REQUIRED)
-          message(STATUS "MIVisionX_LIBRARIES=${MIVisionX_LIBRARIES}")
-          message(STATUS "MIVisionX_INCLUDE_DIRS=${MIVisionX_INCLUDE_DIRS}")
-          message(STATUS "rocal_LIBRARIES=${rocal_LIBRARIES}")
-          message(STATUS "rocal_INCLUDE_DIRS=${rocal_INCLUDE_DIRS}")
+          message(STATUS "MIVisionX_LIBRARIES=\${MIVisionX_LIBRARIES}")
+          message(STATUS "MIVisionX_INCLUDE_DIRS=\${MIVisionX_INCLUDE_DIRS}")
+          message(STATUS "rocal_LIBRARIES=\${rocal_LIBRARIES}")
+          message(STATUS "rocal_INCLUDE_DIRS=\${rocal_INCLUDE_DIRS}")
           CMAKE
           echo "=== configuring downstream find_package project ==="
-          cmake -S "${WORK}" -B "${WORK}/build" -DROCM_PATH=/opt/rocm
+          cmake -S "${WORK}" -B "${WORK}/build" -DROCM_PATH="$(dirname "$(dirname "${CMAKE_DIR}")")"
           echo "find_package(MIVisionX) and find_package(rocal) resolved: OK"
 
       # rocCV ships a real config package rather than a shim, and that config
@@ -782,9 +882,25 @@ jobs:
       - name: Assert rocCV ships a discoverable package config
         run: |
           set -eu
-          CFG=/opt/rocm/lib/cmake/roccv/roccvConfig.cmake
+          # Same rule as the MIVisionX shim: the path is the one listed in the
+          # rocCV devel deb, and that package must own the installed file.
+          deb() { find debs -name "amdrocm-vision-*-Linux-$1.deb" | head -1; }
+          ROCCV_DEV="$(deb roccv-dev)"
+          if [ -z "$ROCCV_DEV" ]; then
+            echo "ERROR: roccv-dev package was not produced"; exit 1
+          fi
+          ROCCV_PKG="$(dpkg-deb -f "$ROCCV_DEV" Package)"
+          listed="$(dpkg-deb -c "$ROCCV_DEV" | awk '$6 ~ /\/roccvConfig\.cmake$/ { print $6; exit }')"
+          if [ -z "$listed" ]; then
+            echo "ERROR: ${ROCCV_PKG} contains no roccvConfig.cmake"; exit 1
+          fi
+          CFG="/${listed#./}"
           if [ ! -f "${CFG}" ]; then
-            echo "ERROR: ${CFG} not installed by amdrocm-roccv-devel"; exit 1
+            echo "ERROR: ${ROCCV_PKG} lists ${CFG} but it is not on disk"; exit 1
+          fi
+          OWNER="$(dpkg -S "$CFG" | awk -F: 'NR==1 { gsub(/ /, "", $1); print $1 }')"
+          if [ "$OWNER" != "$ROCCV_PKG" ]; then
+            echo "ERROR: ${CFG} is owned by ${OWNER}, not ${ROCCV_PKG}"; exit 1
           fi
           echo "  ${CFG}: present"
           echo "  declared dependencies:"
