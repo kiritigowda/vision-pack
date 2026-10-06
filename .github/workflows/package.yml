@@ -24,6 +24,11 @@ on:
         type: string
         required: false
         default: ''
+      rocm_version:
+        description: 'ROCm release version to embed in package metadata and dependencies (e.g. 10.2.0)'
+        type: string
+        required: false
+        default: '10.2.0'
       release_type:
         description: 'ci | nightly'
         type: string
