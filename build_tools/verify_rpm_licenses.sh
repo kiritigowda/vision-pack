@@ -21,7 +21,11 @@ dir="${1:?usage: verify_rpm_licenses.sh <dir-with-rpms>}"
 command -v rpm >/dev/null 2>&1 || { echo "ERROR: rpm not found"; exit 1; }
 
 license_for() {
-  case "$1" in
+  # The RPM name carries the ROCm <major>.<minor>, for example
+  # amdrocm-rocal10.2. The license set depends on the component, not the release.
+  local base
+  base="$(printf '%s\n' "$1" | sed -E 's/[0-9]+\.[0-9]+$//')"
+  case "$base" in
     amdrocm-vision-sysdeps)
       # protobuf BSD-3, libjpeg-turbo IJG/BSD-3/Zlib, lmdb OpenLDAP, libsndfile LGPL-2.1.
       echo "BSD-3-Clause AND IJG AND Zlib AND OLDAP-2.8 AND LGPL-2.1-or-later" ;;
