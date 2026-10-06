@@ -44,6 +44,11 @@ endif()
 
 set(VP_VER  "${VISION_PACK_VERSION}")
 set(VP_ROCM "${VISION_PACK_ROCM_VERSION}")
+# RPM forbids a hyphen in Version: (it separates Version from Release). A
+# nightly VP_VER is 10.2.0-<date>, so the hand-written meta specs must use the
+# same sanitized form CPackRPM applies to the component RPMs: hyphen -> _.
+# Keeps the meta's own Version and its Requires bounds matching the components.
+string(REPLACE "-" "_" VP_RPM_VER "${VP_VER}")
 # <major>.<minor>.<patch> -> <major>.<minor>, for example 10.2.0 -> 10.2.
 # Matches amdrocm-runtime<major>.<minor> rather than a hyphenated suffix.
 string(REGEX MATCH "^[0-9]+\\.[0-9]+" VP_ROCM_REL "${VP_ROCM}")
