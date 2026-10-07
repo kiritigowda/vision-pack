@@ -455,6 +455,19 @@ set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST
     /usr/lib/python3.12/site-packages
 )
 
+# The bundled libjpeg/libturbojpeg/libsndfile are linked with one private
+# symbol-version node (third-party/CMakeLists.txt, #66), and librocal requests
+# it. rewrite_sonames.py renames the SONAMEs with patchelf, which cannot rewrite
+# a library's version-definition base name, so rpm's elfdeps still derives the
+# Provides from the stock name (libjpeg.so.62(<node>)) while it derives
+# librocal's Requires from the renamed file (libjpeg-rocm-vision.so.62(<node>)).
+# They never match and amdrocm-rocal would not install without --nodeps (#61).
+# Declare the renamed capabilities; they exist at runtime, since the loader only
+# checks DT_SONAME/DT_NEEDED. One node per library, so unlike per-upstream-tag
+# lists this does not change when a bundled library is upgraded.
+set(CPACK_RPM_ROCM-SYSDEPS-VISION_PACKAGE_PROVIDES
+    "libjpeg-rocm-vision.so.62(AMDROCM_VISION_1.0)(64bit), libturbojpeg-rocm-vision.so.0(AMDROCM_VISION_1.0)(64bit), libsndfile-rocm-vision.so.1(AMDROCM_VISION_1.0)(64bit)")
+
 # Requires mirror the DEB Depends above. Without them the RPMs declared no
 # dependencies at all and would install onto a host with no ROCm present.
 set(CPACK_RPM_MIVISIONX_PACKAGE_REQUIRES
