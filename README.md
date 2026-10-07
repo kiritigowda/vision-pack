@@ -289,8 +289,8 @@ Files land directly under `/opt/rocm` — no new top-level directories.
     ├── mivisionx/                   samples (-devel), test (-test)
     ├── rocal/test/                  test sources + data
     ├── roccv/                       samples (-devel), test (-test)
-    ├── rocpydecode/                 samples, tests
-    └── rocpyjpegdecode/             samples, tests
+    ├── rocpydecode/                 samples, tests (both in -test)
+    └── rocpyjpegdecode/             samples, tests (both in -test)
 ```
 
 The `.pth` is not under `/opt/rocm` and is not in the dist tarball. DEB writes
@@ -424,7 +424,7 @@ The `package.yml` CI workflow produces:
 | `amdrocm-roccv-devel` | headers, roccvConfig.cmake, samples |
 | `amdrocm-roccv-test` | test sources + data |
 | `amdrocm-pydecode` | rocpydecode, rocpyjpegdecode, pyRocVideoDecode, pyRocJpegDecode |
-| `amdrocm-pydecode-test` | test sources (`share/rocpydecode/tests`, `share/rocpyjpegdecode/tests`) |
+| `amdrocm-pydecode-test` | test sources (`share/rocpydecode/tests`, `share/rocpyjpegdecode/tests`) and the samples they run (`share/rocpydecode/samples`, `share/rocpyjpegdecode/samples`) |
 | `amdrocm-vision-sysdeps` | isolated libturbojpeg, libjpeg, libprotobuf, libprotobuf-lite, liblmdb, libsndfile (`-rocm-vision` SONAMEs) |
 | `amdrocm-vision-pythonpath` | `.pth` registering `/opt/rocm/lib` |
 | `amdrocm-vision` | meta — all runtimes, including pydecode |

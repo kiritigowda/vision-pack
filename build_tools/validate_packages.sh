@@ -32,7 +32,7 @@ expected_contents() {
     amdrocm-roccv-devel)        echo 'include/roccv/ lib/cmake/roccv/' ;;
     amdrocm-roccv-test)         echo 'share/roccv/test/' ;;
     amdrocm-pydecode)           echo 'lib/rocpydecode.*\.so lib/rocpyjpegdecode.*\.so lib/pyRocVideoDecode/ lib/pyRocJpegDecode/' ;;
-    amdrocm-pydecode-test)      echo 'share/rocpydecode/tests/ share/rocpyjpegdecode/tests/' ;;
+    amdrocm-pydecode-test)      echo 'share/rocpydecode/tests/ share/rocpyjpegdecode/tests/ share/rocpydecode/samples/rocdecode/videodecoderaw\.py share/rocpyjpegdecode/samples/rocjpeg/jpegdecodebatched\.py' ;;
     amdrocm-vision-sysdeps)     echo 'libturbojpeg-rocm-vision\.so libjpeg-rocm-vision\.so libprotobuf-rocm-vision\.so liblmdb-rocm-vision\.so libsndfile-rocm-vision\.so' ;;
     amdrocm-vision-pythonpath)  echo 'dist-packages/amdrocm-vision.*\.pth' ;;
     *)                          echo '' ;;
