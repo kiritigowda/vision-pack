@@ -21,14 +21,20 @@ ${TurboJpeg_LIBRARIES} (rocAL_pybind/CMakeLists.txt), so it too references the
 stock libturbojpeg.so.0 and must be rewritten, or its import dlopen fails with
 "libturbojpeg.so.0: cannot open shared object file".
 
+Also strips the renamed libjpeg/libturbojpeg of their NASM-embedded source-file
+symbol-table entries (#73) — a different embedding than __FILE__ in .rodata
+(fixed separately, at compile time, via -ffile-prefix-map), so it needs its
+own fix here.
+
 Usage:
     python3 build_tools/rewrite_sonames.py <staging-root>
 
 <staging-root> is the install tree that mirrors /opt/rocm (e.g. build/staging),
 containing lib/librocal.so and lib/rocm_sysdeps/lib/.
 
-Idempotent: re-running on an already-rewritten tree is a no-op. Exits non-zero
-if patchelf is missing or any consumer still lists a stock bundled SONAME.
+Idempotent: re-running on an already-rewritten tree is a no-op (stripping an
+already-stripped file is a no-op too). Exits non-zero if patchelf or strip is
+missing, or any consumer still lists a stock bundled SONAME.
 """
 import argparse
 import os
@@ -50,6 +56,15 @@ SYSDEP_STEMS = [
 ]
 
 SUFFIX = "-rocm-vision"
+
+# Bundled stems whose SIMD objects are assembled by NASM. NASM embeds a FILE
+# symbol-table entry for its source regardless of -g, which is a different
+# embedding mechanism than __FILE__ in .rodata (and so a different fix than
+# -ffile-prefix-map, #73): the symbol never loads at runtime (readelf -s only,
+# not .dynsym), so `strip --strip-unneeded` removes it without touching the
+# exported dynamic symbols this script's own SONAME/NEEDED rewriting and the
+# runtime loader rely on.
+NASM_STEMS = ["jpeg", "turbojpeg"]
 
 # Consumers (relative to staging root) that may carry a DT_NEEDED on the
 # bundled sysdeps and must have those references rewritten. rocal_pybind.so
@@ -88,6 +103,10 @@ def _run(cmd):
 
 def patchelf_available():
     return shutil.which("patchelf") is not None
+
+
+def strip_available():
+    return shutil.which("strip") is not None
 
 
 def new_basename(old_basename):
@@ -274,6 +293,23 @@ def patch_consumers(root, sysdeps_dir, soname_map):
             print(f"  {consumer.name}: RPATH -> {':'.join(rpath_parts)}")
 
 
+def strip_nasm_symbols(sysdeps_dir):
+    """Strip the renamed libjpeg/libturbojpeg real files (#73).
+
+    --strip-unneeded drops .symtab (where NASM's per-source FILE entries live)
+    while leaving .dynsym alone, so the renamed SONAME and every exported
+    symbol consumers resolve at runtime are unaffected. Only the two NASM-built
+    libs are touched; the rest of SYSDEP_STEMS carry no such entries.
+    """
+    for stem in NASM_STEMS:
+        for so in sorted(
+            p for p in sysdeps_dir.glob(f"lib{stem}{SUFFIX}.so*")
+            if p.is_file() and not p.is_symlink()
+        ):
+            _run(["strip", "--strip-unneeded", str(so)])
+            print(f"  stripped {so.name}")
+
+
 def normalize_vision_lib_rpaths(root):
     """Drop non-$ORIGIN RPATH entries from every staged vision library.
 
@@ -368,6 +404,9 @@ def main():
     if not patchelf_available():
         print("ERROR: patchelf not found on PATH", file=sys.stderr)
         return 1
+    if not strip_available():
+        print("ERROR: strip (binutils) not found on PATH", file=sys.stderr)
+        return 1
 
     print(f"[rewrite_sonames] rewriting bundled sysdeps in {sysdeps_dir}")
     soname_map = rewrite_sysdeps(sysdeps_dir)
@@ -378,6 +417,8 @@ def main():
     normalize_sysdep_rpaths(sysdeps_dir)
     print("[rewrite_sonames] patching consumers")
     patch_consumers(root, sysdeps_dir, soname_map)
+    print("[rewrite_sonames] stripping NASM FILE symbols (#73)")
+    strip_nasm_symbols(sysdeps_dir)
     print("[rewrite_sonames] normalizing vision library RPATHs")
     normalize_vision_lib_rpaths(root)
 

@@ -190,8 +190,19 @@ function(vision_pack_subproject_activate)
         # build machine's compiler runtime directories into RUNPATH. runvx is
         # the shipped binary that keeps those absolute entries (#72). This
         # flag overrides the config; CMake's $ORIGIN install RPATH stays.
-        "-DCMAKE_C_FLAGS:STRING=-fno-rtlib-add-rpath"
-        "-DCMAKE_CXX_FLAGS:STRING=-fno-rtlib-add-rpath"
+        #
+        # Without -ffile-prefix-map, every __FILE__ (rocAL's
+        # CHECK_LMDB_RETURN_STATUS, runvx's ERROR_CHECK, ...) bakes the build
+        # machine's absolute source path into .rodata, where it then surfaces
+        # verbatim in error messages users see (#73). The first mapping covers
+        # this checkout (mivisionx/, rocal/, roccv/, rocpydecode/ all live
+        # under it); the second covers rocpydecode's compiled copy of
+        # ${ROCM_PATH}/share/rocdecode/utils/... (a no-op for the other three
+        # subprojects, which compile nothing under ROCM_PATH). Clang/amdclang
+        # and GCC both treat -ffile-prefix-map as -fmacro-prefix-map plus
+        # -fdebug-prefix-map, so this covers __FILE__ regardless of debug info.
+        "-DCMAKE_C_FLAGS:STRING=-fno-rtlib-add-rpath -ffile-prefix-map=${CMAKE_SOURCE_DIR}=vision-pack -ffile-prefix-map=${ROCM_PATH}=/opt/rocm"
+        "-DCMAKE_CXX_FLAGS:STRING=-fno-rtlib-add-rpath -ffile-prefix-map=${CMAKE_SOURCE_DIR}=vision-pack -ffile-prefix-map=${ROCM_PATH}=/opt/rocm"
         # gcc-toolset's libstdc++.so is a linker script. Symbols newer than the
         # image's GCC 8 libstdc++ come from libstdc++_nonshared.a and are
         # exported unless excluded, so they interpose libstdc++.so.6 (#74).
