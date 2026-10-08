@@ -455,6 +455,21 @@ set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST
     /usr/lib/python3.12/site-packages
 )
 
+# libturbojpeg/libsndfile export versioned symbols (TURBOJPEG_1.0 etc.), and
+# rewrite_sonames.py's SONAME rename (#4) leaves their ELF version-definition
+# BASE entry on the stock name (patchelf cannot rewrite .gnu.version_d), while
+# librocal's version-needs section is correctly rewritten to the renamed name.
+# rpm's elfdeps generates Provides from the stale base and Requires from the
+# renamed name, so they never match and amdrocm-rocal fails to install without
+# --nodeps (#61). Declare the missing capabilities explicitly; they do exist
+# at runtime (the loader only checks DT_SONAME/DT_NEEDED, not this section).
+# Pinned to the currently-bundled libjpeg-turbo 3.2.0 / libsndfile 1.2.2 — a
+# future version bump that adds a new version tag needs a matching addition
+# here, since CPack has no "carry over the Provides side of a renamed SONAME"
+# primitive.
+set(CPACK_RPM_ROCM-SYSDEPS-VISION_PACKAGE_PROVIDES
+    "libturbojpeg-rocm-vision.so.0(TURBOJPEG_1.0)(64bit), libturbojpeg-rocm-vision.so.0(TURBOJPEG_1.1)(64bit), libturbojpeg-rocm-vision.so.0(TURBOJPEG_1.2)(64bit), libturbojpeg-rocm-vision.so.0(TURBOJPEG_2.0)(64bit), libsndfile-rocm-vision.so.1(libsndfile.so.1.0)(64bit)")
+
 # Requires mirror the DEB Depends above. Without them the RPMs declared no
 # dependencies at all and would install onto a host with no ROCm present.
 set(CPACK_RPM_MIVISIONX_PACKAGE_REQUIRES

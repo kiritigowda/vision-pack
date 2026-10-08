@@ -322,6 +322,28 @@ jobs:
             rpm -qp --list "${RPMF}" 2>/dev/null | head -15 | sed 's/^/  /' || true
           done
 
+      - name: Verify RPM set installs without --nodeps
+        working-directory: pkg-build
+        run: |
+          set -u
+          command -v rpm >/dev/null 2>&1 || { echo "rpm not available"; exit 0; }
+          # rpm's elfdeps derives versioned-symbol Requires/Provides from ELF
+          # metadata that build_tools/rewrite_sonames.py's SONAME rename can
+          # only partially rewrite (patchelf cannot touch a producer's own
+          # .gnu.version_d base name), so a stale/renamed mismatch between the
+          # amdrocm-vision-sysdeps Provides and amdrocm-rocal's auto-detected
+          # Requires would otherwise only surface on a real `dnf install` (#61).
+          # A transaction test against an empty rpmdb catches that here.
+          rm -rf rpmdb && rpm --initdb --dbpath "$PWD/rpmdb"
+          UNRESOLVED="$(rpm -i --test --nosignature --dbpath "$PWD/rpmdb" *.rpm 2>&1 \
+            | grep -E '^\s+lib[a-z]+-rocm-vision' || true)"
+          if [ -n "${UNRESOLVED}" ]; then
+            echo "ERROR: RPM set has unresolved bundled-lib dependencies:"
+            echo "${UNRESOLVED}"
+            exit 1
+          fi
+          echo "RPM set resolves all bundled-lib (*-rocm-vision) dependencies: OK"
+
       - name: Generate multiarch tarball
         run: |
           VER="${{ steps.version.outputs.version }}"
