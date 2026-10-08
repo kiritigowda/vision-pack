@@ -86,6 +86,11 @@ if(VISION_PACK_ENABLE_MIVISIONX)
     CMAKE_ARGS
       -DBACKEND=HIP
       -DGPU_SUPPORT=ON
+      # runvx's find_package(OpenCV QUIET) would otherwise link whatever
+      # OpenCV the build host happens to have. JPEG, camera, and display stay
+      # compiled out (#68). The OpenCV-only GDF samples are dropped from
+      # staging in build.yml.
+      -DCMAKE_DISABLE_FIND_PACKAGE_OpenCV=ON
       # Install into ROCM_PATH (same as any ROCm lib):
       #   lib/libopenvx.so, include/mivisionx/, lib/cmake/mivisionx/, etc.
       "-DCMAKE_INSTALL_RPATH=${VP_INSTALL_RPATH}"

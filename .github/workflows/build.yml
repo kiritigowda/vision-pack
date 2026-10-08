@@ -345,6 +345,32 @@ jobs:
           # exists in the packaging project, so it silently matched nothing.
           cmake --install build --prefix build/staging --component runtime
 
+      # runvx is built without OpenCV (#68). MIVisionX still installs the GDF
+      # samples that read a JPEG or open a camera, and their README tells the
+      # user to run them. Drop those from the staged tree (deb, RPM, and the
+      # dist tarball all come from this tree) and replace the README. The
+      # OpenVX ctests live under share/mivisionx/test and are left in place.
+      - name: Drop OpenCV-only runvx samples (#68)
+        run: |
+          GDF=build/staging/share/mivisionx/samples/gdf
+          if [ ! -d "${GDF}" ]; then
+            echo "ERROR: ${GDF} missing"
+            exit 1
+          fi
+          rm -f \
+            "${GDF}/canny.gdf" \
+            "${GDF}/skintonedetect.gdf" \
+            "${GDF}/canny-LIVE.gdf" \
+            "${GDF}/skintonedetect-LIVE.gdf"
+          cat > "${GDF}/README.md" << 'EOF'
+          # GDF samples
+
+          This runvx was built without OpenCV. It reads and writes raw images only.
+          JPEG, PNG, video, camera, and window display are not available, so
+          canny.gdf, skintonedetect.gdf, and the LIVE camera graphs are not shipped.
+          read-gdf-sample.gdf does not need them.
+          EOF
+
       # Side-by-side isolation (#4): rename the bundled sysdeps
       # (protobuf/turbojpeg/lmdb/libsndfile) to private *-rocm-vision SONAMEs and
       # rewrite librocal.so's DT_NEEDED to match, so a host copy of any of these
@@ -404,6 +430,31 @@ jobs:
               echo "  ${NEG_LABEL} absent: OK"
             fi
           done
+          # runvx has no OpenCV image I/O (#68). The JPEG and camera samples
+          # must not ship, and the binary must not have picked up a host OpenCV.
+          echo "=== OpenCV-only runvx samples absent (#68)? ==="
+          GDF=build/staging/share/mivisionx/samples/gdf
+          for SAMPLE in canny.gdf skintonedetect.gdf canny-LIVE.gdf skintonedetect-LIVE.gdf; do
+            if [ -e "${GDF}/${SAMPLE}" ]; then
+              echo "  ERROR: ${SAMPLE} shipped though runvx has no OpenCV"
+              FAIL=1
+            else
+              echo "  ${SAMPLE} absent: OK"
+            fi
+          done
+          if [ ! -f "${GDF}/read-gdf-sample.gdf" ]; then
+            echo "  ERROR: read-gdf-sample.gdf missing"
+            FAIL=1
+          else
+            echo "  read-gdf-sample.gdf kept: OK"
+          fi
+          if readelf -d build/staging/bin/runvx 2>/dev/null | grep -qi opencv; then
+            echo "  ERROR: runvx links OpenCV"
+            echo "$(readelf -d build/staging/bin/runvx | grep -i opencv)"
+            FAIL=1
+          else
+            echo "  runvx has no OpenCV NEEDED: OK"
+          fi
           # rocpydecode modules must sit in lib/ with every other vision .so,
           # not lib64/ (rocpydecode uses GNUInstallDirs, which defaults to lib64
           # on this image; we pass -DCMAKE_INSTALL_LIBDIR=lib to override).

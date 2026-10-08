@@ -498,6 +498,12 @@ Workarounds live in vision-pack, not in the submodules.
 - **rocAL ffmpeg reader disabled** — requires libavcodec/avformat chain,
   excluded by design (`-DCMAKE_DISABLE_FIND_PACKAGE_FFmpeg=ON`).
 
+- **runvx has no OpenCV image I/O** — MIVisionX is built with
+  `-DCMAKE_DISABLE_FIND_PACKAGE_OpenCV=ON`. This `runvx` reads and writes
+  raw images only. `canny.gdf`, `skintonedetect.gdf`, and the LIVE camera
+  graphs are not shipped
+  ([#68](https://github.com/kiritigowda/vision-pack/issues/68)).
+
 ---
 
 ## Changelog
