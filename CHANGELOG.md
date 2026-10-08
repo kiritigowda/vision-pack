@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `include/` on `rocal::rocal`, so both the unprefixed `#include
   "rocal_api.h"` form rocAL's own sources/tests use and the namespaced
   `#include <rocal/rocal_api.h>` form compile (#78).
+- RPM shared libraries are now installed mode 0755 (via `%attr` overrides, DEB
+  stays 0644 as Debian Policy asks) so rpm <= 4.16 (RHEL 8/9) still
+  auto-generates soname Provides/Requires, which it only does for executable
+  files. `runvx`, `libopenvx`, `libvxu`, `libvx_rpp`, `librocal`,
+  `rocal_pybind`, `libroccv`, `rocpycv`, `rocpydecode` and `rocpyjpegdecode`
+  now carry a GNU build ID (`-Wl,--build-id=sha1`), which TheRock's amdclang/
+  AMD LLD does not add by default (#76).
 
 ### Added
 - Bundled third-party dependencies now ship their license files, each in the

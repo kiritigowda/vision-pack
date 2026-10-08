@@ -197,8 +197,16 @@ function(vision_pack_subproject_activate)
         # exported unless excluded, so they interpose libstdc++.so.6 (#74).
         # No-op on a normal libstdc++ that does not link that archive.
         # SHARED covers libopenvx and libroccv; MODULE covers the pybind modules.
-        "-DCMAKE_SHARED_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a"
-        "-DCMAKE_MODULE_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a"
+        "-DCMAKE_SHARED_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a -Wl,--build-id=sha1"
+        "-DCMAKE_MODULE_LINKER_FLAGS:STRING=-Wl,--exclude-libs,libstdc++_nonshared.a -Wl,--build-id=sha1"
+        # TheRock's amdclang/AMD LLD does not add a GNU build ID unless asked
+        # (unlike the bundled sysdeps, linked through the image's GCC, which
+        # does by default), so none of runvx/libopenvx/libvxu/libvx_rpp/
+        # librocal/rocal_pybind/libroccv/rocpycv/rocpydecode/rocpyjpegdecode had
+        # one — debuginfod/.build-id lookups and crash reporters can't identify
+        # the exact binary (#76). EXE_LINKER_FLAGS covers runvx; the two flags
+        # above cover everything else (shared libs, pybind MODULE targets).
+        "-DCMAKE_EXE_LINKER_FLAGS:STRING=-Wl,--build-id=sha1"
         ${_cmake_args}
 
       BUILD_COMMAND
