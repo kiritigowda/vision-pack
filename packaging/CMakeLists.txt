@@ -343,6 +343,30 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/python/amdrocm-vision.pth"
     COMPONENT pythonpath-rpm
 )
 
+# RPM provides for the renamed bundled sysdeps. patchelf rewrites the
+# DT_SONAME but leaves .gnu.version_d naming the original SONAME, so RPM's
+# find-provides emits the original SONAME + symbol-version instead of the
+# renamed one. rewrite_sonames.py records the missing renamed-SONAME
+# capabilities in a sidecar file; inject them as explicit Provides so
+# yum/dnf can resolve consumers like amdrocm-rocal10.2.
+set(_vp_sysdeps_provides_file
+    "${VISION_PACK_STAGING_DIR}/lib/rocm_sysdeps/lib/.rpm-provides")
+if(EXISTS "${_vp_sysdeps_provides_file}")
+  file(STRINGS "${_vp_sysdeps_provides_file}" _vp_raw_provides)
+  set(_vp_sysdeps_provides "")
+  foreach(_prov IN LISTS _vp_raw_provides)
+    string(STRIP "${_prov}" _prov)
+    if(_prov)
+      list(APPEND _vp_sysdeps_provides "${_prov}")
+    endif()
+  endforeach()
+  if(_vp_sysdeps_provides)
+    string(REPLACE ";" " " _vp_sysdeps_provides_str "${_vp_sysdeps_provides}")
+    set(CPACK_RPM_ROCM-SYSDEPS-VISION_PACKAGE_PROVIDES "${_vp_sysdeps_provides_str}")
+    message(STATUS "[vision-pack] amdrocm-vision-sysdeps RPM Provides: ${_vp_sysdeps_provides_str}")
+  endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # DEB settings
 # ---------------------------------------------------------------------------
