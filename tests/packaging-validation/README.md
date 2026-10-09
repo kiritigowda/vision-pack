@@ -1,93 +1,154 @@
-# vision-pack packaging validation
+# Vision-pack packaging validation
 
-This directory contains a reproducible, end-to-end validation of the **apt-install
-path** for vision-pack on Ubuntu 24.04. It starts from an empty container,
-installs ROCm core packages from the AMD nightly apt repository, then installs
-`amdrocm-vision-sdk` and `amdrocm-vision-tests` from a local apt repository built
-from the vision-pack `.deb` files. No tarball extraction or `dpkg --force-depends`
-is used.
+Reusable scripts to validate vision-pack `.deb` and `.rpm` packages in clean
+Docker containers using only the distribution package manager (no tarball/SDK
+extract).
 
-## What it verifies
+## Ubuntu 24.04 apt path
 
-- `amdrocm-base` and `amdrocm-runtime-dev` install cleanly from the nightly repo.
-- `amdrocm-vision-sdk` and `amdrocm-vision-tests` install cleanly from the
-  vision-pack apt repository and pull in all declared dependencies.
-- All four vision runtimes can be imported and exercised:
-  - MIVisionX — 60 OpenVX/RunVX tests
-  - rocAL — 8 CPU tests
-  - rocCV — 40 C++ operator tests
-  - rocPyDecode — type/import smoke test
+### What you need on the host
 
-## Why `amdrocm-runtime-dev` is required
-
-`roccvConfig.cmake` calls `find_dependency(HIP)` and needs `HIPConfig.cmake` /
-`hip-config.cmake`. Those CMake files are shipped in `amdrocm-runtime-dev`, not
-in `amdrocm-base` or `amdrocm-runtime`. Installing only the runtime packages
-will cause the rocCV test build to fail with:
-
-```text
-Could not find a package configuration file provided by "HIP" with any of the
-following names: HIPConfig.cmake, hip-config.cmake
-```
-
-## Prerequisites (host)
-
-- Docker with GPU device support for AMD GPUs.
-- Membership in the host `video` group (and `render` group if present) so the
-  container can access `/dev/kfd` and `/dev/dri`.
-- A local apt repository built from the vision-pack `.deb` files, e.g.:
-
-  ```bash
-  mkdir -p local-apt-repo
-  cp /path/to/vision-pack*.deb local-apt-repo/
-  cd local-apt-repo
-  dpkg-scanpackages . > Packages
-  ```
-
-- `sudo` access if your user is not in the `docker` group.
-
-## Usage
+- A Docker engine (rootless or with `sudo`).
+- The host user must be in the `video` and `render` groups, or those host GIDs
+  must be passed into the container.
+- A local apt repository built from the vision-pack `.deb` files. Example:
 
 ```bash
-cd tests/packaging-validation
-
-# Build the local apt repo if you have not already
-mkdir -p local-apt-repo
-cp /path/to/vision-pack/debs/*.deb local-apt-repo/
-(cd local-apt-repo && dpkg-scanpackages . > Packages)
-
-# Run the validation. The container is removed automatically on exit.
-sudo ./run_apt_install_container_2404.sh
+mkdir -p local-apt-repo/dists/stable/main/binary-amd64
+cp *.deb local-apt-repo/
+cd local-apt-repo
+dpkg-scanpackages . /dev/null > dists/stable/main/binary-amd64/Packages
+gzip -k -f dists/stable/main/binary-amd64/Packages
 ```
 
-The script mounts the local apt repo, the in-container verification script, and a
-`logs/` directory. The full transcript is written to `logs/verify-apt-*.log`.
+### Files
 
-## Pinning a specific ROCm nightly
+- `run_apt_install_container_2404.sh` — host wrapper that starts the container.
+- `verify_apt_install_in_container.sh` — in-container validation script.
 
-By default the script uses the rolling nightly index. To pin a specific build,
-set `ROCM_REPO_URL` to the full apt repo path shown in the GitHub release notes:
+### Run
 
 ```bash
-export ROCM_REPO_URL="https://nightly.repo.amd.com/rocm/core/packages/ubuntu2404/20261007-37549649086"
-sudo ./run_apt_install_container_2404.sh
+sudo ./run_apt_install_container_2404.sh [LOCAL_APT_REPO_DIR] [SCRIPT_DIR]
 ```
 
-## Files
+Environment variables:
 
-| File | Purpose |
-|------|---------|
-| `run_apt_install_container_2404.sh` | Host wrapper that starts the Docker container with GPU access. |
-| `verify_apt_install_in_container.sh` | In-container script that installs packages and runs all test suites. |
-| `local-apt-repo/` | Place the vision-pack `.deb` files here and run `dpkg-scanpackages`. |
-| `logs/` | Written by each validation run. |
+- `ROCM_VERSION` — ROCm version to install, e.g. `10.2`.
+- `ROCM_REPO_URL` — full URL to the unsigned nightly ROCm core apt repo.
+  Default points to the `20261007-37549649086` Ubuntu 24.04 build.
 
-## Expected results
+### What the container does
 
-```text
-python-imports: ok
-MIVisionX: 60/60 tests passed
-rocAL:     8/8 tests passed
-rocCV:     40/40 tests passed
-rocPyDecode: passed
+1. Installs `amdrocm-base<ver>` and `amdrocm-runtime-dev<ver>` from the AMD
+   nightly apt repo. The `-dev` package is **required** because it supplies
+   `HIPConfig.cmake` / `hip-config.cmake` that rocCV's exported CMake config
+   calls via `find_dependency(HIP)`.
+2. Installs `amdrocm-vision-sdk<ver>` and `amdrocm-vision-tests<ver>` from the
+   local `.deb` repo.
+3. Runs Python import smoke tests, MIVisionX, rocAL, rocCV, and rocPyDecode
+   test suites.
+
+### Known good result (nightly 20261007)
+
+| Suite         | Result          |
+|---------------|-----------------|
+| Python imports| ok              |
+| MIVisionX     | 60/60 (100%)    |
+| rocAL         | 8/8 (100%)      |
+| rocCV         | 40/40 (100%)    |
+| rocPyDecode   | passed          |
+
+## Red Hat UBI 9 yum/dnf path
+
+### What you need on the host
+
+- A Docker engine (rootless or with `sudo`).
+- The host user must be in the `video` and `render` groups.
+- A local RPM repository built from the vision-pack `.rpm` files. Example:
+
+```bash
+mkdir -p local-rpm-repo
+cp *.rpm local-rpm-repo/
+cd local-rpm-repo
+createrepo_c .
 ```
+
+### Files
+
+- `run_rpm_install_container_ubi9.sh` — host wrapper that starts the container.
+- `verify_rpm_install_in_container.sh` — in-container validation script.
+
+### Run
+
+```bash
+sudo ./run_rpm_install_container_ubi9.sh [LOCAL_RPM_REPO_DIR] [SCRIPT_DIR]
+```
+
+Environment variables:
+
+- `ROCM_VERSION` — ROCm version to install, e.g. `10.2`.
+- `ROCM_REPO_URL` — full URL to the unsigned nightly ROCm core RPM repo.
+  Default points to the `20261007-37549649086` RHEL 9 build.
+- `PYTHON_CMD` — Python interpreter to use. Default: `python3.12`.
+
+### What the container does
+
+1. Installs build tooling and **Python 3.12**. UBI 9 defaults to Python 3.9,
+   but the vision-pack Python bindings are built for CPython 3.12.
+2. Installs ROCm core packages from the AMD nightly yum repo:
+   `amdrocm-base<ver>`, `amdrocm-runtime-devel<ver>`, `amdrocm-rpp<ver>`,
+   `amdrocm-decode<ver>`, `amdrocm-hipfile<ver>`, and `amdrocm-jpeg<ver>`.
+3. Adds the local vision-pack RPM repo.
+4. **Workaround for 20261007:** the vision-pack RPMs cannot be installed
+   cleanly with `yum` because `amdrocm-vision-sysdeps<ver>` provides the
+   un-renamed SONAME + symbol-version combinations while `amdrocm-rocal<ver>`
+   requires the renamed SONAME + symbol-version combinations. The concrete
+   RPMs are therefore force-installed with `rpm -ivh --nodeps`. The library
+   files are correct; only the RPM `Provides` metadata is incomplete. Once that
+   metadata is fixed, this workaround can be removed and the standard
+   `yum install amdrocm-vision-sdk<ver> amdrocm-vision-tests<ver>` path should
+   work.
+5. Runs the same test suites as the Ubuntu path.
+
+### Known good result with workaround (nightly 20261007)
+
+| Suite         | Result          |
+|---------------|-----------------|
+| Python imports| ok              |
+| MIVisionX     | 60/60 (100%)    |
+| rocAL         | 8/8 (100%)      |
+| rocCV         | 40/40 (100%)    |
+| rocPyDecode   | passed          |
+
+### Open packaging issues found on RHEL 9
+
+1. **RPM Provides metadata gap in `amdrocm-vision-sysdeps10.2`.** The package
+   provides:
+   - `libsndfile.so.1(libsndfile.so.1.0)(64bit)`
+   - `libsndfile-rocm-vision.so.1()(64bit)`
+
+   but `amdrocm-rocal10.2` requires:
+   - `libsndfile-rocm-vision.so.1(libsndfile.so.1.0)(64bit)`
+
+   The same pattern occurs for `libturbojpeg-rocm-vision.so.0(TURBOJPEG_*)`.
+   This prevents `yum`/`dnf` from resolving the vision-pack SDK install.
+
+2. **Python ABI mismatch on UBI 9.** The packaged `.so` Python bindings target
+   CPython 3.12 (`...cpython-312...so`), while RHEL/UBI 9 ships Python 3.9 by
+   default. Install `python3.12` from the UBI 9 appstream repo to run the
+   import smoke test and Python-based test suites.
+
+## Troubleshooting
+
+- `docker: permission denied` — add the user to the `docker` group and
+  re-login, or run the wrappers with `sudo`.
+- `render` group not found inside the container — the scripts use numeric host
+  GIDs (`--group-add $(getent group render | cut -d: -f3)`) because the base
+  Ubuntu/UBI images do not define a `render` group.
+- rocCV configure fails with `Could not find a package configuration file
+  provided by HIP` — the ROCm runtime development package that contains
+  `HIPConfig.cmake` / `hip-config.cmake` is not installed. On apt install
+  `amdrocm-runtime-dev<ver>`; on yum install `amdrocm-runtime-devel<ver>`.
+- rocPyDecode import fails with `librocdecode.so.1` missing on RHEL — install
+  `amdrocm-decode<ver>` from the ROCm core repo.
