@@ -206,7 +206,7 @@ jobs:
 
       - name: Restore ROCm SDK archive
         id: sdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.rocm-sdk-cache
           key: rocm-sdk-linux-${{ steps.sdk.outputs.key }}
@@ -717,7 +717,7 @@ jobs:
 
       - name: Restore ROCm SDK archive
         id: sdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.rocm-sdk-cache
           key: rocm-sdk-linux-${{ needs.build.outputs.resolved_sdk_key }}
