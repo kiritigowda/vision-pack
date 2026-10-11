@@ -483,12 +483,16 @@ set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST
 # dependencies at all and would install onto a host with no ROCm present.
 set(CPACK_RPM_MIVISIONX_PACKAGE_REQUIRES
     "${VP_RPM_RPP}, ${VP_RPM_RUNTIME}")
+# Python bindings are built for CPython 3.12. On RHEL/UBI 9 the default python3
+# is 3.9, so the binding packages must pull in python3.12 explicitly (not just
+# transitively through pythonpath-rpm) so users have the correct interpreter
+# installed. See issue #115.
 set(CPACK_RPM_ROCAL_PACKAGE_REQUIRES
-    "${VP_PKG_MIVISIONX} >= ${VP_VER}, ${VP_PKG_SYSDEPS} >= ${VP_VER}, ${VP_PKG_PYTHONPATH} >= ${VP_VER}, ${VP_RPM_DECODE}, ${VP_RPM_JPEG}, ${VP_RPM_HIPFILE}")
+    "${VP_PKG_MIVISIONX} >= ${VP_VER}, ${VP_PKG_SYSDEPS} >= ${VP_VER}, ${VP_PKG_PYTHONPATH} >= ${VP_VER}, ${VP_RPM_DECODE}, ${VP_RPM_JPEG}, ${VP_RPM_HIPFILE}, python3.12")
 set(CPACK_RPM_ROCCV_PACKAGE_REQUIRES
-    "${VP_PKG_PYTHONPATH} >= ${VP_VER}, ${VP_RPM_RUNTIME}")
+    "${VP_PKG_PYTHONPATH} >= ${VP_VER}, ${VP_RPM_RUNTIME}, python3.12")
 set(CPACK_RPM_ROCPYDECODE_PACKAGE_REQUIRES
-    "${VP_PKG_PYTHONPATH} >= ${VP_VER}, ${VP_RPM_DECODE}, ${VP_RPM_JPEG}")
+    "${VP_PKG_PYTHONPATH} >= ${VP_VER}, ${VP_RPM_DECODE}, ${VP_RPM_JPEG}, python3.12")
 set(CPACK_RPM_MIVISIONX-DEV_PACKAGE_REQUIRES
     "${VP_PKG_MIVISIONX} >= ${VP_VER}")
 set(CPACK_RPM_MIVISIONX-TEST_PACKAGE_REQUIRES
